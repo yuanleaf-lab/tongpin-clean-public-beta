@@ -12,6 +12,7 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -26,6 +27,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -173,24 +175,31 @@ public final class MainActivity extends Activity {
         Window window = getWindow();
         window.setStatusBarColor(palette.background);
         window.setNavigationBarColor(palette.surface);
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+        }
         int flags = window.getDecorView().getSystemUiVisibility();
         if (palette.dark) flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         else flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (palette.dark) flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            else flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
         window.getDecorView().setSystemUiVisibility(flags);
     }
 
     private View buildScreen() {
         LinearLayout outer = new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL);
-        outer.setBackgroundColor(palette.background);
+        outer.setBackground(appBackground());
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(palette.background);
+        scroll.setBackgroundColor(Color.TRANSPARENT);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(14), dp(14), dp(14));
+        root.setPadding(dp(14), dp(10), dp(14), dp(10));
         scroll.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -224,19 +233,63 @@ public final class MainActivity extends Activity {
                 0,
                 1f
         ));
-        outer.addView(buildBottomNav(), new LinearLayout.LayoutParams(
+        LinearLayout bottomNav = buildBottomNav();
+        outer.addView(bottomNav, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
+        applyEdgeToEdgeInsets(outer, bottomNav);
         updateActiveTab();
         return outer;
     }
 
-    private View buildBottomNav() {
+    private void applyEdgeToEdgeInsets(LinearLayout content, LinearLayout bottomNav) {
+        final int contentTopPadding = content.getPaddingTop();
+        final int navLeftPadding = bottomNav.getPaddingLeft();
+        final int navTopPadding = bottomNav.getPaddingTop();
+        final int navRightPadding = bottomNav.getPaddingRight();
+        final int navBottomPadding = bottomNav.getPaddingBottom();
+
+        content.setOnApplyWindowInsetsListener((view, insets) -> {
+            int topInset = topSystemInset(insets);
+            int bottomInset = bottomSystemInset(insets);
+            view.setPadding(
+                    view.getPaddingLeft(),
+                    contentTopPadding + topInset,
+                    view.getPaddingRight(),
+                    view.getPaddingBottom()
+            );
+            bottomNav.setPadding(
+                    navLeftPadding,
+                    navTopPadding,
+                    navRightPadding,
+                    navBottomPadding + bottomInset
+            );
+            return insets;
+        });
+        content.requestApplyInsets();
+    }
+
+    private int topSystemInset(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            Insets bars = insets.getInsets(WindowInsets.Type.statusBars() | WindowInsets.Type.displayCutout());
+            return bars.top;
+        }
+        return insets.getSystemWindowInsetTop();
+    }
+
+    private int bottomSystemInset(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+        }
+        return insets.getSystemWindowInsetBottom();
+    }
+
+    private LinearLayout buildBottomNav() {
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
-        nav.setPadding(dp(12), dp(8), dp(12), dp(10));
+        nav.setPadding(dp(12), dp(7), dp(12), dp(9));
         nav.setBackgroundColor(palette.surface);
         navPlayButton = navButton("播放", () -> switchTab(TAB_PLAY));
         navNotesButton = navButton("笔记", () -> switchTab(TAB_NOTES));
@@ -258,7 +311,7 @@ public final class MainActivity extends Activity {
         button.setStateListAnimator(null);
         button.setPadding(dp(6), 0, dp(6), 0);
         button.setOnClickListener(v -> action.run());
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(40), 1f);
         params.setMarginStart(dp(4));
         params.setMarginEnd(dp(4));
         button.setLayoutParams(params);
@@ -339,8 +392,8 @@ public final class MainActivity extends Activity {
         FrameLayout artwork = new FrameLayout(this);
         GradientDrawable artworkBg = rounded(palette.accentSoft, Color.TRANSPARENT, 22);
         artwork.setBackground(artworkBg);
-        LinearLayout.LayoutParams artworkParams = new LinearLayout.LayoutParams(dp(92), dp(92));
-        artworkParams.setMarginEnd(dp(16));
+        LinearLayout.LayoutParams artworkParams = new LinearLayout.LayoutParams(dp(84), dp(84));
+        artworkParams.setMarginEnd(dp(14));
         mediaRow.addView(artwork, artworkParams);
 
         artworkView = new ImageView(this);
@@ -381,7 +434,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(5)
         );
-        progressParams.topMargin = dp(18);
+        progressParams.topMargin = dp(14);
         card.addView(progressBar, progressParams);
 
         timeText = text("0:00 / 0:00", 12f, palette.secondary, false);
@@ -391,26 +444,29 @@ public final class MainActivity extends Activity {
 
         LinearLayout lyricBox = new LinearLayout(this);
         lyricBox.setOrientation(LinearLayout.VERTICAL);
-        lyricBox.setPadding(dp(16), dp(16), dp(16), dp(14));
+        lyricBox.setPadding(dp(15), dp(13), dp(15), dp(12));
         lyricBox.setBackground(rounded(palette.surfaceAlt, palette.border, 18));
         LinearLayout.LayoutParams lyricParams = matchWrap();
-        lyricParams.topMargin = dp(16);
+        lyricParams.topMargin = dp(13);
         card.addView(lyricBox, lyricParams);
 
         TextView lyricLabel = text("正在唱", 12f, palette.secondary, true);
         lyricBox.addView(lyricLabel);
         lyricText = text("等待同步歌词", 20f, palette.text, true);
         lyricText.setGravity(Gravity.CENTER);
-        lyricText.setPadding(0, dp(12), 0, dp(8));
+        lyricText.setMinHeight(dp(42));
+        lyricText.setMaxLines(2);
+        lyricText.setPadding(0, dp(9), 0, dp(6));
         lyricBox.addView(lyricText, matchWrap());
         nextLyricText = text("", 13f, palette.secondary, false);
         nextLyricText.setGravity(Gravity.CENTER);
+        nextLyricText.setMaxLines(2);
         lyricBox.addView(nextLyricText, matchWrap());
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        controls.setPadding(0, dp(18), 0, 0);
+        controls.setPadding(0, dp(14), 0, 0);
         controls.addView(roundControl("‹‹", () -> sendLocalControl("previous"), false));
         playPauseButton = roundControl("▶", () -> {
             PlaybackSnapshot playback = Prefs.playback(this);
@@ -422,7 +478,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout quick = new LinearLayout(this);
         quick.setOrientation(LinearLayout.HORIZONTAL);
-        quick.setPadding(0, dp(14), 0, 0);
+        quick.setPadding(0, dp(11), 0, 0);
         refreshButton = actionButton("刷新状态", this::requestImmediateRefresh, false);
         Button retryLyrics = actionButton("重试歌词", () -> {
             if (TongpinNotificationListener.requestLyricsRetry()) {
@@ -1262,9 +1318,9 @@ public final class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
+        card.setPadding(dp(15), dp(15), dp(15), dp(15));
         card.setBackground(rounded(palette.surface, palette.border, 22));
-        card.setElevation(dp(2));
+        card.setElevation(dp(1));
         LinearLayout.LayoutParams params = matchWrap();
         params.bottomMargin = dp(12);
         card.setLayoutParams(params);
@@ -1327,7 +1383,7 @@ public final class MainActivity extends Activity {
         button.setStateListAnimator(null);
         button.setPadding(dp(8), 0, dp(8), 0);
         button.setOnClickListener(view -> action.run());
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(40), 1f);
         params.setMarginStart(dp(3));
         params.setMarginEnd(dp(3));
         button.setLayoutParams(params);
@@ -1348,12 +1404,21 @@ public final class MainActivity extends Activity {
         button.setPadding(0, 0, 0, 0);
         button.setGravity(Gravity.CENTER);
         button.setOnClickListener(v -> action.run());
-        int size = dp(primary ? 58 : 46);
+        int size = dp(primary ? 54 : 44);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
         params.setMarginStart(dp(10));
         params.setMarginEnd(dp(10));
         button.setLayoutParams(params);
         return button;
+    }
+
+    private GradientDrawable appBackground() {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{palette.background, palette.surfaceAlt}
+        );
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        return drawable;
     }
 
     private GradientDrawable rounded(int fill, int stroke, int radiusDp) {
