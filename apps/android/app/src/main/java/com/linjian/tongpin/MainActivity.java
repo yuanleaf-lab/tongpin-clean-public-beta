@@ -11,10 +11,14 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -34,6 +38,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.SeekBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -63,6 +68,11 @@ import java.util.regex.Pattern;
 public final class MainActivity extends Activity {
     private static final String VERSION = "1.3.1-public";
     private static final int REQUEST_IMPORT_LYRICS_FILE = 1208;
+    private static final int REQUEST_PICK_BACKGROUND = 1216;
+    private static final String UI_PREFS = "tongpin_ui_space";
+    private static final String KEY_BACKGROUND_URI = "background_uri";
+    private static final String KEY_GLASS_TRANSPARENCY = "glass_transparency";
+    private static final int DEFAULT_GLASS_TRANSPARENCY = 18;
     private static final int TAB_PLAY = 0;
     private static final int TAB_NOTES = 1;
     private static final int TAB_SETTINGS = 2;
@@ -153,6 +163,10 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_PICK_BACKGROUND) {
+            handleBackgroundPick(resultCode, data);
+            return;
+        }
         if (requestCode != REQUEST_IMPORT_LYRICS_FILE || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         String trackKey = pendingLyricsImportTrackKey;
         pendingLyricsImportTrackKey = "";
@@ -223,7 +237,7 @@ public final class MainActivity extends Activity {
         settingsSection.addView(buildSetupCard());
         root.addView(settingsSection, matchWrap());
 
-        TextView footer = text("同频 Clean · 让正在播放的这一刻，被另一个人听见。", 12f, palette.secondary, false);
+        TextView footer = text("同频Clean · 正在播放，也正在被听见。", 12f, palette.secondary, false);
         footer.setGravity(Gravity.CENTER);
         footer.setPadding(dp(8), dp(4), dp(8), 0);
         root.addView(footer, matchWrap());
@@ -290,7 +304,7 @@ public final class MainActivity extends Activity {
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
         nav.setPadding(dp(12), dp(7), dp(12), dp(9));
-        nav.setBackgroundColor(palette.surface);
+        nav.setBackground(navGlassBackground());
         navPlayButton = navButton("播放", () -> switchTab(TAB_PLAY));
         navNotesButton = navButton("笔记", () -> switchTab(TAB_NOTES));
         navSettingsButton = navButton("设置", () -> switchTab(TAB_SETTINGS));
@@ -340,7 +354,12 @@ public final class MainActivity extends Activity {
     private void updateNavButton(Button button, boolean selected) {
         if (button == null) return;
         button.setTextColor(selected ? palette.onAccent : palette.accent);
-        button.setBackground(rounded(selected ? palette.accent : palette.accentSoft, Color.TRANSPARENT, 18));
+        button.setBackground(rounded(
+                selected ? translucent(palette.accent, 212) : translucent(palette.surface, glassAlpha(116)),
+                selected ? translucent(Color.WHITE, 86) : translucent(palette.accent, 42),
+                22
+        ));
+        button.setElevation(selected ? dp(2) : 0);
     }
 
     private View buildHeader() {
@@ -383,22 +402,22 @@ public final class MainActivity extends Activity {
     }
 
     private View buildSongCard() {
-        LinearLayout card = card();
+        LinearLayout card = playbackCard();
 
         LinearLayout mediaRow = new LinearLayout(this);
         mediaRow.setOrientation(LinearLayout.HORIZONTAL);
         mediaRow.setGravity(Gravity.CENTER_VERTICAL);
 
         FrameLayout artwork = new FrameLayout(this);
-        GradientDrawable artworkBg = rounded(palette.accentSoft, Color.TRANSPARENT, 22);
-        artwork.setBackground(artworkBg);
+        artwork.setPadding(dp(5), dp(5), dp(5), dp(5));
+        artwork.setBackground(artworkGlassBackground());
         LinearLayout.LayoutParams artworkParams = new LinearLayout.LayoutParams(dp(84), dp(84));
         artworkParams.setMarginEnd(dp(14));
         mediaRow.addView(artwork, artworkParams);
 
         artworkView = new ImageView(this);
         artworkView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        artworkView.setBackground(rounded(Color.TRANSPARENT, Color.TRANSPARENT, 22));
+        artworkView.setBackground(rounded(Color.TRANSPARENT, Color.TRANSPARENT, 18));
         artworkView.setClipToOutline(true);
         artwork.addView(artworkView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -445,7 +464,11 @@ public final class MainActivity extends Activity {
         LinearLayout lyricBox = new LinearLayout(this);
         lyricBox.setOrientation(LinearLayout.VERTICAL);
         lyricBox.setPadding(dp(15), dp(13), dp(15), dp(12));
-        lyricBox.setBackground(rounded(palette.surfaceAlt, palette.border, 18));
+        lyricBox.setBackground(rounded(
+                translucent(blend(palette.surface, palette.surfaceAlt, 0.36f), glassAlpha(palette.dark ? 188 : 204)),
+                translucent(blend(Color.WHITE, palette.accent, 0.08f), Math.max(58, glassAlpha(126))),
+                20
+        ));
         LinearLayout.LayoutParams lyricParams = matchWrap();
         lyricParams.topMargin = dp(13);
         card.addView(lyricBox, lyricParams);
@@ -573,6 +596,46 @@ public final class MainActivity extends Activity {
         }, false));
         serverBox.addView(serverActions, matchWrap());
         card.addView(drawer("连接与服务器", "地址", true, serverBox));
+
+        LinearLayout spaceBox = new LinearLayout(this);
+        spaceBox.setOrientation(LinearLayout.VERTICAL);
+        TextView spaceHint = text(backgroundUri().isEmpty()
+                ? "使用低饱和主题背景，也可以从相册选择一张图片做成磨砂音乐空间。"
+                : "已使用自定义背景；播放页会自动模糊和暗化，保证歌词与控制按钮清晰。", 12f, palette.secondary, false);
+        spaceBox.addView(spaceHint, matchWrap());
+        LinearLayout spaceActions = new LinearLayout(this);
+        spaceActions.setOrientation(LinearLayout.HORIZONTAL);
+        spaceActions.setPadding(0, dp(8), 0, 0);
+        spaceActions.addView(actionButton("选择背景", this::pickSpaceBackground, true));
+        spaceActions.addView(actionButton("恢复默认", this::clearSpaceBackground, false));
+        spaceBox.addView(spaceActions, matchWrap());
+        TextView glassLabel = text("玻璃透明度 · " + glassTransparency() + "%", 12f, palette.secondary, true);
+        glassLabel.setPadding(0, dp(12), 0, dp(4));
+        spaceBox.addView(glassLabel, matchWrap());
+        SeekBar glassSlider = new SeekBar(this);
+        glassSlider.setMax(45);
+        glassSlider.setProgress(glassTransparency());
+        glassSlider.setProgressTintList(ColorStateList.valueOf(palette.accent));
+        glassSlider.setThumbTintList(ColorStateList.valueOf(palette.accent));
+        glassSlider.setProgressBackgroundTintList(ColorStateList.valueOf(translucent(palette.accentSoft, 180)));
+        glassSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                glassLabel.setText("玻璃透明度 · " + progress + "%");
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                saveGlassTransparency(seekBar.getProgress());
+                recreate();
+            }
+        });
+        spaceBox.addView(glassSlider, matchWrap());
+        card.addView(drawer("音乐空间", backgroundUri().isEmpty() ? "默认背景" : "自定义背景", true, spaceBox));
 
         LinearLayout lanBox = new LinearLayout(this);
         lanBox.setOrientation(LinearLayout.VERTICAL);
@@ -786,7 +849,7 @@ public final class MainActivity extends Activity {
 
         boolean connected = permission && !room.code.isEmpty() && lastSync > 0L
                 && System.currentTimeMillis() - lastSync < 12_000L;
-        statusPill.setText(connected ? "● 同频已连接" : permission ? "○ 等待连接" : "○ 需要通知权限");
+        statusPill.setText(connected ? "● 正在同频" : permission ? "○ 等待播放器" : "○ 需要通知权限");
         statusPill.setTextColor(connected ? palette.success : palette.accent);
         statusPill.setBackground(rounded(connected ? palette.successSoft : palette.accentSoft, Color.TRANSPARENT, 99));
         syncText.setText(lastPublish == 0L ? "尚未上传播放状态" : "状态更新于 " + relativeTime(lastPublish));
@@ -1315,12 +1378,79 @@ public final class MainActivity extends Activity {
         if (launch != null) startActivity(launch); else toast("没有找到 QQ 音乐");
     }
 
+    private void pickSpaceBackground() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, REQUEST_PICK_BACKGROUND);
+        } catch (Throwable error) {
+            toast("无法打开相册：" + safeMessage(error));
+        }
+    }
+
+    private void handleBackgroundPick(int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        int flags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        try {
+            getContentResolver().takePersistableUriPermission(uri, flags);
+        } catch (Throwable ignored) {
+            // Some pickers grant only temporary access; the URI is still useful for the current session.
+        }
+        saveBackgroundUri(uri.toString());
+        toast("音乐空间背景已更新");
+        recreate();
+    }
+
+    private void clearSpaceBackground() {
+        saveBackgroundUri("");
+        toast("已恢复默认背景");
+        recreate();
+    }
+
+    private String backgroundUri() {
+        return getSharedPreferences(UI_PREFS, MODE_PRIVATE).getString(KEY_BACKGROUND_URI, "");
+    }
+
+    private void saveBackgroundUri(String value) {
+        getSharedPreferences(UI_PREFS, MODE_PRIVATE)
+                .edit()
+                .putString(KEY_BACKGROUND_URI, value == null ? "" : value)
+                .apply();
+    }
+
+    private int glassTransparency() {
+        return getSharedPreferences(UI_PREFS, MODE_PRIVATE)
+                .getInt(KEY_GLASS_TRANSPARENCY, DEFAULT_GLASS_TRANSPARENCY);
+    }
+
+    private void saveGlassTransparency(int value) {
+        getSharedPreferences(UI_PREFS, MODE_PRIVATE)
+                .edit()
+                .putInt(KEY_GLASS_TRANSPARENCY, Math.max(0, Math.min(45, value)))
+                .apply();
+    }
+
     private LinearLayout card() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(15), dp(15), dp(15), dp(15));
         card.setBackground(rounded(palette.surface, palette.border, 22));
         card.setElevation(dp(1));
+        LinearLayout.LayoutParams params = matchWrap();
+        params.bottomMargin = dp(12);
+        card.setLayoutParams(params);
+        return card;
+    }
+
+    private LinearLayout playbackCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(16), dp(16), dp(15));
+        card.setBackground(glassCardBackground());
+        card.setElevation(dp(3));
         LinearLayout.LayoutParams params = matchWrap();
         params.bottomMargin = dp(12);
         card.setLayoutParams(params);
@@ -1366,7 +1496,7 @@ public final class MainActivity extends Activity {
         TextView chip = text(label, 11f, foreground, true);
         chip.setGravity(Gravity.CENTER);
         chip.setPadding(dp(9), dp(4), dp(9), dp(4));
-        chip.setBackground(rounded(background, Color.TRANSPARENT, 99));
+        chip.setBackground(rounded(translucent(background, palette.dark ? 218 : 236), Color.TRANSPARENT, 99));
         return chip;
     }
 
@@ -1377,10 +1507,15 @@ public final class MainActivity extends Activity {
         button.setTextSize(12f);
         button.setTypeface(Typeface.create("sans", Typeface.BOLD));
         button.setTextColor(primary ? palette.onAccent : palette.accent);
-        button.setBackground(rounded(primary ? palette.accent : palette.accentSoft, Color.TRANSPARENT, 14));
+        button.setBackground(rounded(
+                primary ? palette.accent : translucent(blend(palette.surface, palette.accentSoft, 0.22f), glassAlpha(palette.dark ? 112 : 128)),
+                primary ? translucent(Color.WHITE, 58) : translucent(blend(Color.WHITE, palette.accent, 0.10f), Math.max(42, glassAlpha(92))),
+                18
+        ));
         button.setMinHeight(0);
         button.setMinimumHeight(0);
         button.setStateListAnimator(null);
+        button.setElevation(primary ? dp(1) : 0);
         button.setPadding(dp(8), 0, dp(8), 0);
         button.setOnClickListener(view -> action.run());
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(40), 1f);
@@ -1397,10 +1532,16 @@ public final class MainActivity extends Activity {
         button.setTextSize(primary ? 20f : 17f);
         button.setTypeface(Typeface.create("sans", Typeface.BOLD));
         button.setTextColor(primary ? palette.onAccent : palette.accent);
-        button.setBackground(oval(primary ? palette.accent : palette.accentSoft));
+        button.setBackground(primary
+                ? ovalGradient(
+                blend(palette.accent, Color.WHITE, palette.dark ? 0.04f : 0.22f),
+                blend(palette.accent, Color.BLACK, palette.dark ? 0.18f : 0.04f)
+        )
+                : oval(translucent(blend(palette.surface, palette.accentSoft, 0.10f), glassAlpha(palette.dark ? 88 : 102)), translucent(blend(Color.WHITE, palette.accent, 0.16f), Math.max(52, glassAlpha(96)))));
         button.setMinHeight(0);
         button.setMinimumHeight(0);
         button.setStateListAnimator(null);
+        button.setElevation(primary ? dp(4) : dp(1));
         button.setPadding(0, 0, 0, 0);
         button.setGravity(Gravity.CENTER);
         button.setOnClickListener(v -> action.run());
@@ -1412,12 +1553,144 @@ public final class MainActivity extends Activity {
         return button;
     }
 
-    private GradientDrawable appBackground() {
+    private Drawable appBackground() {
+        Drawable image = customBackgroundDrawable();
+        if (image != null) return image;
+        GradientDrawable base = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{
+                        palette.background,
+                        blend(palette.background, palette.accentSoft, palette.dark ? 0.12f : 0.20f),
+                        blend(palette.surfaceAlt, palette.background, 0.46f)
+                }
+        );
+        base.setShape(GradientDrawable.RECTANGLE);
+
+        GradientDrawable glow = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{
+                        translucent(blend(palette.accentSoft, palette.background, 0.35f), palette.dark ? 44 : 112),
+                        Color.TRANSPARENT
+                }
+        );
+        glow.setShape(GradientDrawable.RECTANGLE);
+
+        GradientDrawable depth = new GradientDrawable(
+                GradientDrawable.Orientation.BR_TL,
+                new int[]{
+                        translucent(blend(palette.surfaceAlt, palette.accent, 0.10f), palette.dark ? 38 : 82),
+                        Color.TRANSPARENT
+                }
+        );
+        depth.setShape(GradientDrawable.RECTANGLE);
+
+        return new LayerDrawable(new Drawable[]{base, glow, depth});
+    }
+
+    private Drawable customBackgroundDrawable() {
+        String value = backgroundUri();
+        if (value.isEmpty()) return null;
+        try (InputStream input = getContentResolver().openInputStream(Uri.parse(value))) {
+            Bitmap decoded = BitmapFactory.decodeStream(input);
+            if (decoded == null) return null;
+            Bitmap scaled = Bitmap.createScaledBitmap(decoded, dp(96), dp(170), true);
+            if (decoded != scaled) decoded.recycle();
+            Bitmap blurred = boxBlur(scaled, 3);
+            BitmapDrawable image = new BitmapDrawable(getResources(), blurred);
+            image.setGravity(Gravity.FILL);
+            image.setDither(true);
+
+            GradientDrawable shade = new GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{
+                            translucent(palette.background, palette.dark ? 172 : 118),
+                            translucent(blend(palette.background, Color.BLACK, palette.dark ? 0.42f : 0.16f), palette.dark ? 210 : 154)
+                    }
+            );
+            shade.setShape(GradientDrawable.RECTANGLE);
+
+            GradientDrawable tint = new GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    new int[]{
+                            translucent(palette.accentSoft, palette.dark ? 46 : 86),
+                            Color.TRANSPARENT
+                    }
+            );
+            tint.setShape(GradientDrawable.RECTANGLE);
+            return new LayerDrawable(new Drawable[]{image, shade, tint});
+        } catch (Throwable error) {
+            return null;
+        }
+    }
+
+    private Drawable glassCardBackground() {
+        GradientDrawable glass = roundedGradient(
+                translucent(blend(palette.surface, Color.WHITE, palette.dark ? 0.04f : 0.22f), glassAlpha(palette.dark ? 150 : 162)),
+                translucent(blend(palette.surfaceAlt, palette.background, 0.42f), glassAlpha(palette.dark ? 118 : 132)),
+                translucent(blend(Color.WHITE, palette.accent, palette.dark ? 0.10f : 0.08f), Math.max(62, glassAlpha(palette.dark ? 86 : 148))),
+                28
+        );
+        GradientDrawable rim = roundedGradient(
+                translucent(blend(Color.WHITE, palette.accent, palette.dark ? 0.08f : 0.12f), Math.max(72, glassAlpha(palette.dark ? 84 : 132))),
+                Color.TRANSPARENT,
+                Color.TRANSPARENT,
+                28
+        );
+        GradientDrawable floor = roundedGradient(
+                Color.TRANSPARENT,
+                translucent(blend(palette.accentSoft, palette.background, 0.30f), Math.max(34, glassAlpha(76))),
+                Color.TRANSPARENT,
+                28
+        );
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{glass, rim, floor});
+        layers.setLayerInset(1, dp(1), dp(1), dp(1), dp(8));
+        layers.setLayerInset(2, dp(2), dp(9), dp(2), dp(2));
+        return layers;
+    }
+
+    private Drawable artworkGlassBackground() {
+        GradientDrawable glass = roundedGradient(
+                translucent(blend(palette.surface, Color.WHITE, 0.16f), glassAlpha(118)),
+                translucent(blend(palette.surfaceAlt, palette.background, 0.24f), glassAlpha(92)),
+                translucent(blend(Color.WHITE, palette.accent, 0.10f), Math.max(54, glassAlpha(104))),
+                24
+        );
+        GradientDrawable sheen = roundedGradient(
+                translucent(Color.WHITE, Math.max(38, glassAlpha(72))),
+                Color.TRANSPARENT,
+                Color.TRANSPARENT,
+                24
+        );
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{glass, sheen});
+        layers.setLayerInset(1, dp(1), dp(1), dp(1), dp(5));
+        return layers;
+    }
+
+    private Drawable navGlassBackground() {
+        GradientDrawable base = roundedGradient(
+                translucent(blend(palette.surface, Color.WHITE, palette.dark ? 0.04f : 0.24f), glassAlpha(palette.dark ? 140 : 154)),
+                translucent(blend(palette.surfaceAlt, palette.background, 0.28f), glassAlpha(palette.dark ? 116 : 126)),
+                translucent(blend(Color.WHITE, palette.accent, 0.08f), Math.max(42, glassAlpha(82))),
+                0
+        );
+        GradientDrawable topLine = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{translucent(Color.WHITE, palette.dark ? 28 : 92), Color.TRANSPARENT}
+        );
+        topLine.setShape(GradientDrawable.RECTANGLE);
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{base, topLine});
+        layers.setLayerInset(1, 0, 0, 0, dp(42));
+        return layers;
+    }
+
+    private GradientDrawable roundedGradient(int top, int bottom, int stroke, int radiusDp) {
         GradientDrawable drawable = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{palette.background, palette.surfaceAlt}
+                new int[]{top, bottom}
         );
         drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setCornerRadius(dp(radiusDp));
+        drawable.setStroke(dp(1), stroke);
         return drawable;
     }
 
@@ -1435,6 +1708,76 @@ public final class MainActivity extends Activity {
         drawable.setShape(GradientDrawable.OVAL);
         drawable.setColor(fill);
         return drawable;
+    }
+
+    private GradientDrawable oval(int fill, int stroke) {
+        GradientDrawable drawable = oval(fill);
+        drawable.setStroke(dp(1), stroke);
+        return drawable;
+    }
+
+    private GradientDrawable ovalGradient(int top, int bottom) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{top, bottom}
+        );
+        drawable.setShape(GradientDrawable.OVAL);
+        return drawable;
+    }
+
+    private Bitmap boxBlur(Bitmap source, int radius) {
+        int width = source.getWidth();
+        int height = source.getHeight();
+        int[] input = new int[width * height];
+        int[] output = new int[width * height];
+        source.getPixels(input, 0, width, 0, 0, width, height);
+        int safeRadius = Math.max(1, radius);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int count = 0;
+                int red = 0;
+                int green = 0;
+                int blue = 0;
+                for (int oy = -safeRadius; oy <= safeRadius; oy++) {
+                    int py = Math.max(0, Math.min(height - 1, y + oy));
+                    for (int ox = -safeRadius; ox <= safeRadius; ox++) {
+                        int px = Math.max(0, Math.min(width - 1, x + ox));
+                        int color = input[py * width + px];
+                        red += Color.red(color);
+                        green += Color.green(color);
+                        blue += Color.blue(color);
+                        count++;
+                    }
+                }
+                output[y * width + x] = Color.rgb(red / count, green / count, blue / count);
+            }
+        }
+        Bitmap blurred = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        blurred.setPixels(output, 0, width, 0, 0, width, height);
+        source.recycle();
+        return blurred;
+    }
+
+    private int translucent(int color, int alpha) {
+        return Color.argb(
+                Math.max(0, Math.min(255, alpha)),
+                Color.red(color),
+                Color.green(color),
+                Color.blue(color)
+        );
+    }
+
+    private int glassAlpha(int baseAlpha) {
+        return Math.max(18, Math.min(255, baseAlpha - glassTransparency()));
+    }
+
+    private int blend(int from, int to, float ratio) {
+        float clamped = Math.max(0f, Math.min(1f, ratio));
+        return Color.rgb(
+                Math.round(Color.red(from) + (Color.red(to) - Color.red(from)) * clamped),
+                Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * clamped),
+                Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * clamped)
+        );
     }
 
     private LinearLayout.LayoutParams matchWrap() {
@@ -1560,6 +1903,8 @@ public final class MainActivity extends Activity {
                     new Palette("cream", "奶油白", "#FAF6EE", "#FFFDFC", "#F4EDE2", "#2E2923", "#7B6F62", "#C98152", "#FFFFFF", "#F4DCCB", "#E8DAC9", "#E8DED2", "#5F8A68", "#E1F0E3", false),
                     new Palette("star", "星空蓝", "#0E1730", "#16213F", "#1D2C51", "#F6F8FF", "#AAB7D7", "#7EA6FF", "#0E1730", "#253D70", "#2B3A60", "#293B66", "#82D3B1", "#1D4B43", true),
                     new Palette("matcha", "抹茶绿", "#F3F7EE", "#FEFFFC", "#E8F0DF", "#283126", "#6D7868", "#789868", "#FFFFFF", "#DCE9D3", "#D2DEC8", "#DCE6D4", "#4F8460", "#DDEEE1", false),
+                    new Palette("mist", "雾蓝", "#EFF6F5", "#FCFFFE", "#E0ECEB", "#243231", "#667A78", "#5F8C89", "#FFFFFF", "#D8E9E7", "#CADBD9", "#D5E3E1", "#4E8273", "#DCEFE8", false),
+                    new Palette("sakura", "樱花粉", "#FBF3F5", "#FFFDFD", "#F4E5E9", "#33272B", "#826D73", "#B47183", "#FFFFFF", "#F0D9E0", "#E4CED5", "#EBD9DE", "#6F8A66", "#E4F0DE", false),
                     new Palette("lilac", "雾紫", "#F7F2FA", "#FFFCFF", "#EFE5F4", "#30283A", "#786B82", "#8E68B1", "#FFFFFF", "#E8D9F1", "#DED0E6", "#E5D9EC", "#5D8A72", "#DDEEE5", false)
             };
         }
