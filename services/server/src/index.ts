@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express from 'express';
 import { handleMcpRequest } from './mcp.js';
@@ -7,6 +8,8 @@ import { playerNameOf, toPublicRoom, type CommandStatus, type PlaybackCommandTyp
 
 const port = Number(process.env.PORT ?? 3000);
 const dataFile = process.env.DATA_FILE ?? './data/rooms.json';
+const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
+const controlFile = fileURLToPath(new URL('../public/control.html', import.meta.url));
 const store = new RoomStore(dataFile);
 await store.load();
 
@@ -14,7 +17,7 @@ const app = express();
 app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({ limit: '128kb' }));
-app.use(express.static(new URL('../public', import.meta.url).pathname));
+app.use(express.static(publicDir));
 
 const secretOf = (req: express.Request): string => {
   const auth = req.header('authorization') ?? '';
@@ -35,7 +38,7 @@ app.get('/lan', (_req, res) => res.json({
   control: '/control',
   mcp: '/mcp'
 }));
-app.get('/control', (_req, res) => res.sendFile(new URL('../public/control.html', import.meta.url).pathname));
+app.get('/control', (_req, res) => res.sendFile(controlFile));
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'tongpin-clean', version: '1.3.1', lan: true }));
 
 app.post('/api/rooms', async (_req, res) => {
