@@ -3,13 +3,53 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 import type { RoomStore } from './store.js';
-import { toPublicRoom } from './types.js';
+import { toPublicRoom, type PublicRoom } from './types.js';
 
 const textResult = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
 });
 
 const normalizeSongKey = (value: string): string => value.trim().toLocaleLowerCase();
+
+const currentContextOf = (room: PublicRoom) => {
+  const playback = room.playback;
+  return playback ? {
+    song: {
+      title: playback.title,
+      artist: playback.artist,
+      album: playback.album,
+      playerName: playback.playerName
+    },
+    playback: {
+      playing: playback.playing,
+      positionMs: playback.positionMs
+    },
+    lyrics: {
+      current: playback.lyric,
+      next: playback.nextLyric,
+      synced: playback.lyricsSynced,
+      source: playback.lyricsSource
+    }
+  } : null;
+};
+
+const songMemoriesOf = (
+  room: Pick<PublicRoom, 'notes'>,
+  title: string,
+  options: { limit?: number; newestFirst?: boolean } = {}
+) => {
+  const targetTitle = normalizeSongKey(title);
+  const notes = room.notes.filter(note => normalizeSongKey(note.trackTitle) === targetTitle);
+  const orderedNotes = options.newestFirst
+    ? [...notes].sort((a, b) => b.createdAt - a.createdAt)
+    : notes;
+  const limitedNotes = options.limit === undefined ? orderedNotes : orderedNotes.slice(0, options.limit);
+  return limitedNotes.map(note => ({
+    text: note.text,
+    positionMs: note.positionMs,
+    createdAt: note.createdAt
+  }));
+};
 
 export function createMcpServer(store: RoomStore): McpServer {
   const server = new McpServer({ name: 'tongpin-clean', version: '1.3.1' });
@@ -48,27 +88,9 @@ export function createMcpServer(store: RoomStore): McpServer {
   }, async ({ code, roomSecret }) => {
     try {
       const room = toPublicRoom(store.authenticate(code, roomSecret));
-      const playback = room.playback;
       return textResult({
         ok: true,
-        context: playback ? {
-          song: {
-            title: playback.title,
-            artist: playback.artist,
-            album: playback.album,
-            playerName: playback.playerName
-          },
-          playback: {
-            playing: playback.playing,
-            positionMs: playback.positionMs
-          },
-          lyrics: {
-            current: playback.lyric,
-            next: playback.nextLyric,
-            synced: playback.lyricsSynced,
-            source: playback.lyricsSource
-          }
-        } : null
+        context: currentContextOf(room)
       });
     } catch {
       return textResult({ ok: false, error: '房间不存在或密钥错误' });
@@ -155,14 +177,7 @@ export function createMcpServer(store: RoomStore): McpServer {
       const cleanTitle = title.trim();
       const cleanArtist = artist.trim();
       const room = store.authenticate(code, roomSecret);
-      const targetTitle = normalizeSongKey(cleanTitle);
-      const memories = room.notes
-        .filter(note => normalizeSongKey(note.trackTitle) === targetTitle)
-        .map(note => ({
-          text: note.text,
-          positionMs: note.positionMs,
-          createdAt: note.createdAt
-        }));
+      const memories = songMemoriesOf(room, cleanTitle);
       return textResult({
         ok: true,
         song: {
@@ -170,6 +185,36 @@ export function createMcpServer(store: RoomStore): McpServer {
           artist: cleanArtist
         },
         memories
+      });
+    } catch {
+      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+    }
+  });
+
+  server.registerTool('get_song_context', {
+    title: '读取当前歌曲上下文与记忆',
+    description: '获取当前歌曲上下文以及这首歌过去留下的听歌记录，供 AI 在聊天时自然引用历史回忆。调用本工具后，不需要再分别调用 get_current_context 和 get_song_memory；它会读取当前播放歌曲，并按当前歌曲标题合并最多 5 条最近的历史听歌笔记。',
+    inputSchema: {
+      code: z.string().min(6),
+      roomSecret: z.string().min(10)
+    }
+  }, async ({ code, roomSecret }) => {
+    try {
+      const room = toPublicRoom(store.authenticate(code, roomSecret));
+      const context = currentContextOf(room);
+      if (!context) {
+        return textResult({
+          ok: true,
+          song: null,
+          playback: null,
+          lyrics: null,
+          memories: []
+        });
+      }
+      return textResult({
+        ok: true,
+        ...context,
+        memories: songMemoriesOf(room, context.song.title, { limit: 5, newestFirst: true })
       });
     } catch {
       return textResult({ ok: false, error: '房间不存在或密钥错误' });
