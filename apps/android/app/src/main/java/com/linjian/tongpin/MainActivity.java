@@ -104,6 +104,7 @@ public final class MainActivity extends Activity {
     private TextView chatSongArtist;
     private TextView chatLyricText;
     private TextView chatMessagesText;
+    private EditText chatInput;
     private LinearLayout notesList;
     private TextView artworkFallback;
     private ImageView artworkView;
@@ -126,6 +127,7 @@ public final class MainActivity extends Activity {
     private LinearLayout settingsSection;
     private LinearLayout chatSection;
     private boolean notesCurrentOnly = true;
+    private final StringBuilder chatTranscript = new StringBuilder();
 
     private final Runnable refreshRunnable = new Runnable() {
         @Override
@@ -612,18 +614,15 @@ public final class MainActivity extends Activity {
         inputRow.setOrientation(LinearLayout.HORIZONTAL);
         inputRow.setGravity(Gravity.CENTER_VERTICAL);
         inputRow.setPadding(0, dp(12), 0, 0);
-        EditText input = field("", "想聊聊这首歌...");
-        input.setSingleLine(false);
-        input.setMinLines(1);
-        input.setMaxLines(3);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        chatInput = field("", "想聊聊这首歌...");
+        chatInput.setSingleLine(false);
+        chatInput.setMinLines(1);
+        chatInput.setMaxLines(3);
+        chatInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         inputParams.setMarginEnd(dp(8));
-        inputRow.addView(input, inputParams);
-        Button sendButton = actionButton("发送", () -> {
-            chatMessagesText.setText("一起听歌，一起聊歌。\n这里会记录你和音乐相遇的瞬间。");
-            toast("共听对话暂未开放");
-        }, true);
+        inputRow.addView(chatInput, inputParams);
+        Button sendButton = actionButton("发送", this::sendChatMessage, true);
         inputRow.addView(sendButton, new LinearLayout.LayoutParams(dp(76), dp(44)));
         card.addView(inputRow, matchWrap());
         return card;
@@ -921,6 +920,62 @@ public final class MainActivity extends Activity {
         if (serverInput == null) return;
         Prefs.saveServer(this, serverInput.getText().toString());
         serverInput.setText(Prefs.server(this));
+    }
+
+    private void sendChatMessage() {
+        if (chatInput == null || chatMessagesText == null) return;
+        String message = chatInput.getText().toString().trim();
+        if (message.isEmpty()) {
+            toast("先写一句想聊的内容");
+            return;
+        }
+        RoomCredentials room = Prefs.room(this);
+        if (room.code.isEmpty() || room.secret.isEmpty()) {
+            toast("请先创建房间");
+            return;
+        }
+
+        appendChatLine("你", message);
+        chatInput.setText("");
+        renderChatTranscript("共听：正在听这首歌…");
+
+        RoomApi.sendChat(this, message, new RoomApi.Callback<>() {
+            @Override
+            public void onSuccess(String reply) {
+                runOnUiThread(() -> {
+                    appendChatLine("共听", reply == null || reply.trim().isEmpty() ? "我听到了，但暂时没有组织好回复。" : reply.trim());
+                });
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                runOnUiThread(() -> {
+                    String message = safeMessage(error);
+                    if (message.contains("AI_NOT_CONFIGURED")) {
+                        appendChatLine("共听", "服务端还没有配置共听 AI。");
+                    } else {
+                        appendChatLine("共听", "网络失败：" + message);
+                    }
+                });
+            }
+        });
+    }
+
+    private void appendChatLine(String speaker, String value) {
+        if (chatTranscript.length() > 0) chatTranscript.append("\n\n");
+        chatTranscript.append(speaker).append("：").append(value);
+        renderChatTranscript(null);
+    }
+
+    private void renderChatTranscript(String pendingLine) {
+        if (chatMessagesText == null) return;
+        String text = chatTranscript.length() == 0
+                ? "一起听歌，一起聊歌。\n这里会记录你和音乐相遇的瞬间。"
+                : chatTranscript.toString();
+        if (pendingLine != null && !pendingLine.isEmpty()) {
+            text += "\n\n" + pendingLine;
+        }
+        chatMessagesText.setText(text);
     }
 
     private void refreshUi() {
