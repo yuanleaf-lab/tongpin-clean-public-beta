@@ -80,7 +80,7 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('get_current_context', {
     title: '读取当前音乐上下文',
-    description: '读取当前房间正在播放的精简音乐上下文，专门用于 AI 实时聊歌。当用户询问当前歌曲、现在听什么、这句歌词、这首歌怎么样、解释歌词、正在播放等问题时，可以调用本工具。返回聊天所需的歌曲、歌手、专辑、播放器、播放状态、进度、当前歌词、下一句歌词、歌词同步状态和歌词来源。',
+    description: '只读取当前房间的实时音乐状态。适用于需要当前播放状态、播放进度 positionMs、当前歌词 lyric、下一句歌词 nextLyric、歌词同步状态和歌词来源的场景；不包含历史听歌记忆。如果用户想聊当前歌曲或回忆这首歌过去的记录，优先使用 get_song_context。',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10)
@@ -147,7 +147,7 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('add_listening_note', {
     title: '添加听歌笔记',
-    description: '实际写入同频房间的听歌笔记，而不是只在聊天中口头记住。当用户表达“帮我记一下”“记录这一刻”“收藏这句”“把现在记下来”“留一句笔记”等记录当前听歌的意图时，应优先调用本工具写入房间笔记；工具调用成功后，才可以回复“已记录”。如果用户没有明确给出笔记文本，先调用 get_room 获取当前歌曲、当前歌词和 positionMs，再使用用户刚才的话、当前歌词 lyric，或简短整理后的文字作为 text。positionMs 可以使用当前播放进度，也可以省略，让服务器采用当前进度。必须区分聊天中的口头记住和写入同频房间笔记：用户要求记录当前听歌时，应实际调用 add_listening_note。',
+    description: '实际写入同频房间的听歌笔记，而不是只在聊天中口头记住。当用户表达“帮我记一下”“记录这一刻”“收藏这句”“把现在记下来”“留一句笔记”等记录当前听歌的意图时，应优先调用本工具写入房间笔记；工具调用成功后，才可以回复“已记录”。保存听歌记录前，可以先调用 get_song_context 获取当前歌曲、当前歌词和 positionMs，用于记录准确的听歌节点。如果用户没有明确给出笔记文本，可以使用用户刚才的话、当前歌词 lyric，或简短整理后的文字作为 text。positionMs 可以使用当前播放进度，也可以省略，让服务器采用当前进度。必须区分聊天中的口头记住和写入同频房间笔记：用户要求记录当前听歌时，应实际调用 add_listening_note。',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10),
@@ -193,7 +193,7 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('get_song_context', {
     title: '读取当前歌曲上下文与记忆',
-    description: '获取当前歌曲上下文以及这首歌过去留下的听歌记录，供 AI 在聊天时自然引用历史回忆。调用本工具后，不需要再分别调用 get_current_context 和 get_song_memory；它会读取当前播放歌曲，并按当前歌曲标题合并最多 5 条最近的历史听歌笔记。',
+    description: 'AI 聊歌时的主要入口。获取当前播放歌曲、当前歌词、播放状态，以及这首歌过去保存的听歌记忆，供 AI 在聊天时自然引用历史回忆。用户询问正在听的歌、歌词含义、想聊当前歌曲、问这首歌以前有没有记录，或想回忆之前听这首歌的时刻时，应优先调用本工具。调用本工具后，不需要再分别调用 get_current_context 和 get_song_memory；它会读取当前播放歌曲，并按当前歌曲标题合并最多 5 条最近的历史听歌笔记。',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10)
