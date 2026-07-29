@@ -93,6 +93,23 @@ public final class RoomApi {
         });
     }
 
+    public static void sendChat(Context context, String message, Callback<String> callback) {
+        EXECUTOR.execute(() -> {
+            try {
+                String cleanMessage = message == null ? "" : message.trim();
+                if (cleanMessage.isEmpty()) throw new IOException("消息不能为空");
+                String server = Prefs.server(context);
+                RoomCredentials room = Prefs.room(context);
+                if (room.code.isEmpty() || room.secret.isEmpty()) throw new IOException("尚未创建房间");
+                JSONObject body = new JSONObject().put("message", cleanMessage);
+                JSONObject json = request("POST", server + "/api/rooms/" + room.code + "/chat", room.secret, body);
+                callback.onSuccess(json.optString("reply", ""));
+            } catch (Throwable error) {
+                callback.onError(error);
+            }
+        });
+    }
+
     public static JSONObject getRoomSync(Context context) throws Exception {
         String server = Prefs.server(context);
         RoomCredentials room = Prefs.room(context);
