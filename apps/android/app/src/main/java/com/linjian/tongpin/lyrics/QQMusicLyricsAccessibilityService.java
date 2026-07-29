@@ -2,7 +2,6 @@ package com.linjian.tongpin.lyrics;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
-import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Path;
 import android.graphics.Rect;
@@ -26,6 +25,7 @@ import com.linjian.tongpin.data.PlaybackSnapshot;
 import com.linjian.tongpin.data.Prefs;
 import com.linjian.tongpin.media.PlayerCatalog;
 import com.linjian.tongpin.media.TongpinNotificationListener;
+import com.linjian.tongpin.sync.TongpinForegroundService;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -203,19 +203,11 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         SearchRequest request = searchRequest;
         if (request == null) return;
         try {
-            Log.d(TAG, "launchQqMusic executing commandId=" + request.commandId);
-            Intent intent = getPackageManager().getLaunchIntentForPackage(QQ_MUSIC);
-            if (intent == null) {
-                Log.w(TAG, "launchQqMusic failed because launch intent is null");
-                return;
-            }
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                    | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-            startActivity(intent);
+            Log.d(TAG, "launchQqMusic requesting foreground service commandId=" + request.commandId);
+            TongpinForegroundService.requestLaunchQqMusic(this);
             request.launchedUi = true;
             request.lastLaunchAt = System.currentTimeMillis();
-            Log.d(TAG, "launchQqMusic startActivity returned without exception");
+            Log.d(TAG, "launchQqMusic request sent to foreground service");
             handler.postDelayed(() -> logActiveWindow("launchQqMusic activeWindow after 350ms"), 350L);
             handler.postDelayed(() -> logActiveWindow("launchQqMusic activeWindow after 900ms"), 900L);
         } catch (Throwable error) {

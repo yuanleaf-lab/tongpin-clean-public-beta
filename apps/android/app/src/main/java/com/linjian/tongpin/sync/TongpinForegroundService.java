@@ -14,18 +14,22 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.service.notification.NotificationListenerService;
+import android.util.Log;
 
 import com.linjian.tongpin.MainActivity;
 import com.linjian.tongpin.R;
 import com.linjian.tongpin.data.PlaybackSnapshot;
 import com.linjian.tongpin.data.Prefs;
 import com.linjian.tongpin.data.RoomCredentials;
+import com.linjian.tongpin.media.PlayerCatalog;
 import com.linjian.tongpin.media.TongpinNotificationListener;
 
 public final class TongpinForegroundService extends Service {
     public static final String ACTION_START = "com.linjian.tongpin.action.START_BACKGROUND_SYNC";
     public static final String ACTION_STOP = "com.linjian.tongpin.action.STOP_BACKGROUND_SYNC";
+    public static final String ACTION_LAUNCH_QQ_MUSIC = "com.linjian.tongpin.action.LAUNCH_QQ_MUSIC";
 
+    private static final String TAG = "TongpinForeground";
     private static final String CHANNEL_ID = "tongpin_background_sync";
     private static final int NOTIFICATION_ID = 524;
     private static final long KEEP_ALIVE_INTERVAL_MS = 2_500L;
@@ -70,6 +74,16 @@ public final class TongpinForegroundService extends Service {
         context.stopService(new Intent(context, TongpinForegroundService.class));
     }
 
+    public static void requestLaunchQqMusic(Context context) {
+        Log.d(TAG, "requestLaunchQqMusic");
+        Intent intent = new Intent(context, TongpinForegroundService.class).setAction(ACTION_LAUNCH_QQ_MUSIC);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -91,6 +105,10 @@ public final class TongpinForegroundService extends Service {
         startAsForeground(buildNotification());
         handler.removeCallbacks(keepAliveRunnable);
         handler.post(keepAliveRunnable);
+        if (ACTION_LAUNCH_QQ_MUSIC.equals(action)) {
+            Log.d(TAG, "received ACTION_LAUNCH_QQ_MUSIC");
+            launchQqMusic();
+        }
         return START_STICKY;
     }
 
@@ -115,6 +133,24 @@ public final class TongpinForegroundService extends Service {
             );
         } else {
             startForeground(NOTIFICATION_ID, notification);
+        }
+    }
+
+    private void launchQqMusic() {
+        try {
+            Log.d(TAG, "launchQqMusic executing from foreground service");
+            Intent intent = getPackageManager().getLaunchIntentForPackage(PlayerCatalog.QQ_MUSIC);
+            if (intent == null) {
+                Log.w(TAG, "launchQqMusic failed because launch intent is null");
+                return;
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            startActivity(intent);
+            Log.d(TAG, "launchQqMusic startActivity returned without exception");
+        } catch (Throwable error) {
+            Log.w(TAG, "launchQqMusic failed", error);
         }
     }
 
