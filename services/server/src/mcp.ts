@@ -36,6 +36,43 @@ export function createMcpServer(store: RoomStore): McpServer {
     }
   });
 
+  server.registerTool('get_current_context', {
+    title: '读取当前音乐上下文',
+    description: '读取当前房间正在播放的精简音乐上下文，专门用于 AI 实时聊歌。当用户询问当前歌曲、现在听什么、这句歌词、这首歌怎么样、解释歌词、正在播放等问题时，可以调用本工具。返回聊天所需的歌曲、歌手、专辑、播放器、播放状态、进度、当前歌词、下一句歌词、歌词同步状态和歌词来源。',
+    inputSchema: {
+      code: z.string().min(6),
+      roomSecret: z.string().min(10)
+    }
+  }, async ({ code, roomSecret }) => {
+    try {
+      const room = toPublicRoom(store.authenticate(code, roomSecret));
+      const playback = room.playback;
+      return textResult({
+        ok: true,
+        context: playback ? {
+          song: {
+            title: playback.title,
+            artist: playback.artist,
+            album: playback.album,
+            playerName: playback.playerName
+          },
+          playback: {
+            playing: playback.playing,
+            positionMs: playback.positionMs
+          },
+          lyrics: {
+            current: playback.lyric,
+            next: playback.nextLyric,
+            synced: playback.lyricsSynced,
+            source: playback.lyricsSource
+          }
+        } : null
+      });
+    } catch {
+      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+    }
+  });
+
   server.registerTool('set_playback_command', {
     title: '控制同频播放',
     description: '向手机当前选中的播放器发送播放、暂停、上一首、下一首或跳转进度命令。支持 QQ 音乐、酷狗音乐、网易云音乐的基础媒体会话控制；调用后需等待手机后台服务领取并回传执行结果。',
