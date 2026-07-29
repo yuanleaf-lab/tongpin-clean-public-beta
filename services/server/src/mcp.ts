@@ -86,7 +86,7 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('add_listening_note', {
     title: '添加听歌笔记',
-    description: '在当前歌曲与进度附近记录一句听歌笔记。当用户要求“记一下”“收藏这句”“记录现在”等操作时，可以先调用 get_room 获取当前歌曲、当前歌词和 positionMs，再调用本工具写入；用户不需要手动提供 positionMs，未提供时服务器会使用当前播放进度。',
+    description: '实际写入同频房间的听歌笔记，而不是只在聊天中口头记住。当用户表达“帮我记一下”“记录这一刻”“收藏这句”“把现在记下来”“留一句笔记”等记录当前听歌的意图时，应优先调用本工具写入房间笔记；工具调用成功后，才可以回复“已记录”。如果用户没有明确给出笔记文本，先调用 get_room 获取当前歌曲、当前歌词和 positionMs，再使用用户刚才的话、当前歌词 lyric，或简短整理后的文字作为 text。positionMs 可以使用当前播放进度，也可以省略，让服务器采用当前进度。必须区分聊天中的口头记住和写入同频房间笔记：用户要求记录当前听歌时，应实际调用 add_listening_note。',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10),
