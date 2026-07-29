@@ -65,7 +65,7 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('get_room', {
     title: '读取同频房间',
-    description: '读取同频房间的当前播放上下文。当用户询问“现在听什么”“这首歌”“当前歌词”“这句歌词”“刚刚播放”“正在听”等当前播放相关问题时，应优先调用本工具。返回数据包含歌曲、歌手、专辑、播放器、播放状态、进度 positionMs、当前歌词 lyric、下一句歌词 nextLyric、命令执行结果和听歌笔记。',
+    description: '读取同频房间的完整状态，适用于调试、管理和开发测试。返回完整房间数据，包括播放状态、命令执行结果和听歌笔记。它不是 AI 日常聊歌入口；当用户询问“我现在听什么歌”“这首歌怎么样”“这句歌词什么意思”或“帮我回忆这首歌”等当前歌曲聊天和记忆场景时，应统一优先使用 get_song_context。',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10)
