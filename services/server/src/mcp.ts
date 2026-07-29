@@ -23,7 +23,7 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('get_room', {
     title: '读取同频房间',
-    description: '读取当前歌曲、当前播放器（QQ 音乐 / 酷狗音乐 / 网易云音乐 / 其他媒体会话）、进度、播放状态、当前与下一句同步歌词、命令执行结果和听歌笔记。',
+    description: '读取同频房间的当前播放上下文。当用户询问“现在听什么”“这首歌”“当前歌词”“这句歌词”“刚刚播放”“正在听”等当前播放相关问题时，应优先调用本工具。返回数据包含歌曲、歌手、专辑、播放器、播放状态、进度 positionMs、当前歌词 lyric、下一句歌词 nextLyric、命令执行结果和听歌笔记。',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10)
@@ -86,7 +86,7 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('add_listening_note', {
     title: '添加听歌笔记',
-    description: '在当前歌曲与进度附近记录一句话。',
+    description: '在当前歌曲与进度附近记录一句听歌笔记。当用户要求“记一下”“收藏这句”“记录现在”等操作时，可以先调用 get_room 获取当前歌曲、当前歌词和 positionMs，再调用本工具写入；用户不需要手动提供 positionMs，未提供时服务器会使用当前播放进度。',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10),
