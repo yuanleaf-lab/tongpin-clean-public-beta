@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -46,6 +47,7 @@ import java.util.regex.Pattern;
  *    best matching result when MediaSession.playFromSearch is not supported.
  */
 public final class QQMusicLyricsAccessibilityService extends AccessibilityService {
+    private static final String TAG = "TongpinSearch";
     private static final String QQ_MUSIC = PlayerCatalog.QQ_MUSIC;
     private static final long SCAN_INTERVAL_MS = 850L;
     private static final long OCR_INTERVAL_MS = 1_500L;
@@ -96,12 +98,17 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
             String title,
             String artist
     ) {
+        Log.d(TAG, "requestSearchAndPlay commandId=" + commandId + " query=" + query + " title=" + title + " artist=" + artist);
         QQMusicLyricsAccessibilityService service = instance;
-        if (service == null) return false;
+        if (service == null) {
+            Log.w(TAG, "requestSearchAndPlay ignored because accessibility service is not connected");
+            return false;
+        }
         SearchRequest request = new SearchRequest(commandId, query, title, artist);
         service.handler.post(() -> {
             if (service.searchRequest != null
                     && service.searchRequest.commandId.equals(request.commandId)) {
+                Log.d(TAG, "requestSearchAndPlay duplicate command ignored commandId=" + request.commandId);
                 return;
             }
             service.beginSearchAutomation(request);
@@ -163,6 +170,7 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
 
     private void beginSearchAutomation(SearchRequest request) {
         searchRequest = request;
+        Log.d(TAG, "beginSearchAutomation commandId=" + request.commandId + " query=" + request.query);
         Prefs.saveStatus(this, "自动点歌 · 正在打开 QQ 音乐");
         launchQqMusic();
         handler.removeCallbacks(automationTick);
@@ -193,15 +201,28 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         SearchRequest request = searchRequest;
         if (request == null) return;
         try {
+            Log.d(TAG, "launchQqMusic executing");
             Intent intent = getPackageManager().getLaunchIntentForPackage(QQ_MUSIC);
-            if (intent == null) return;
+            if (intent == null) {
+                Log.w(TAG, "launchQqMusic failed because launch intent is null");
+                return;
+            }
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
             startActivity(intent);
             request.launchedUi = true;
             request.lastLaunchAt = System.currentTimeMillis();
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            Log.d(TAG, "launchQqMusic after startActivity activeWindow=" + rootState(root));
         } catch (Throwable error) {
+            Log.w(TAG, "launchQqMusic failed", error);
             Prefs.saveStatus(this, "自动点歌 · 无法打开 QQ 音乐");
         }
+    }
+
+    private static String rootState(AccessibilityNodeInfo root) {
+        if (root == null) return "null";
+        CharSequence packageName = root.getPackageName();
+        return packageName == null ? "package=null" : "package=" + packageName;
     }
 
     private void runSearchAutomation() {
@@ -216,17 +237,23 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
 
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null || root.getPackageName() == null || !QQ_MUSIC.contentEquals(root.getPackageName())) {
+            Log.d(TAG, "runSearchAutomation waiting for QQ Music active window root=" + rootState(root));
             if (now - request.lastLaunchAt > 1_800L) launchQqMusic();
             return;
         }
+        Log.d(TAG, "runSearchAutomation root packageName=" + root.getPackageName() + " stage=" + request.stage);
 
         AccessibilityNodeInfo edit = findEditable(root);
         if (request.stage == SearchRequest.STAGE_OPEN_SEARCH) {
             if (edit != null) {
+                Log.d(TAG, "search input already visible");
                 request.stage = SearchRequest.STAGE_ENTER_QUERY;
             } else {
                 AccessibilityNodeInfo searchButton = findSearchButton(root);
-                if (searchButton != null && clickNode(searchButton)) {
+                Log.d(TAG, "find search entry result=" + (searchButton != null));
+                boolean clickedSearchEntry = searchButton != null && clickNode(searchButton);
+                Log.d(TAG, "click search entry result=" + clickedSearchEntry);
+                if (clickedSearchEntry) {
                     request.lastActionAt = now;
                     Prefs.saveStatus(this, "自动点歌 · 已打开搜索");
                 }
@@ -237,10 +264,13 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         if (request.stage == SearchRequest.STAGE_ENTER_QUERY) {
             edit = findEditable(root);
             if (edit == null) {
+                Log.w(TAG, "search input not found before entering query");
                 request.stage = SearchRequest.STAGE_OPEN_SEARCH;
                 return;
             }
-            if (setNodeText(edit, request.query)) {
+            boolean textSet = setNodeText(edit, request.query);
+            Log.d(TAG, "set search text result=" + textSet);
+            if (textSet) {
                 request.stage = SearchRequest.STAGE_SELECT_RESULT;
                 request.lastActionAt = now;
                 Prefs.saveStatus(this, "自动点歌 · 正在搜索「" + request.title + "」");
@@ -251,7 +281,10 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
 
         if (request.stage == SearchRequest.STAGE_SELECT_RESULT) {
             AccessibilityNodeInfo result = findBestResult(root, request.title, request.artist);
-            if (result != null && clickNode(result)) {
+            Log.d(TAG, "find best result result=" + (result != null));
+            boolean clickedResult = result != null && clickNode(result);
+            Log.d(TAG, "click best result result=" + clickedResult);
+            if (clickedResult) {
                 request.stage = SearchRequest.STAGE_WAIT_PLAYBACK;
                 request.lastActionAt = now;
                 Prefs.saveStatus(this, "自动点歌 · 已点击最匹配结果");
@@ -260,7 +293,9 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
 
             if (!request.simplified && now - request.lastActionAt > 5_500L) {
                 edit = findEditable(root);
-                if (edit != null && !request.title.isEmpty() && setNodeText(edit, request.title)) {
+                boolean titleSet = edit != null && !request.title.isEmpty() && setNodeText(edit, request.title);
+                Log.d(TAG, "set simplified title text result=" + titleSet);
+                if (titleSet) {
                     request.simplified = true;
                     request.lastActionAt = now;
                     Prefs.saveStatus(this, "自动点歌 · 改用歌名重新搜索");
@@ -275,13 +310,24 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
     private void submitSearchIfPossible() {
         if (searchRequest == null) return;
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return;
+        if (root == null) {
+            Log.w(TAG, "submitSearchIfPossible root is null");
+            return;
+        }
+        Log.d(TAG, "submitSearchIfPossible root=" + rootState(root));
         AccessibilityNodeInfo edit = findEditable(root);
         if (edit != null && Build.VERSION.SDK_INT >= 30) {
-            edit.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
+            boolean imeEntered = edit.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
+            Log.d(TAG, "submit search by IME result=" + imeEntered);
+        } else {
+            Log.d(TAG, "submit search by IME skipped edit=" + (edit != null) + " sdk=" + Build.VERSION.SDK_INT);
         }
         AccessibilityNodeInfo button = findSearchButton(root);
-        if (button != null && button != edit) clickNode(button);
+        Log.d(TAG, "submit search button found=" + (button != null));
+        if (button != null && button != edit) {
+            boolean clickedButton = clickNode(button);
+            Log.d(TAG, "submit search button click result=" + clickedButton);
+        }
     }
 
     private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo root) {

@@ -14,6 +14,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
+import android.util.Log;
 import android.view.KeyEvent;
 
 import com.linjian.tongpin.data.LiveLyricsSnapshot;
@@ -37,6 +38,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class TongpinNotificationListener extends NotificationListenerService {
+    private static final String TAG = "TongpinCommand";
     private static final long POLL_INTERVAL_MS = 700L;
     private static final long POSITION_PUBLISH_STEP_MS = 1_200L;
     private static final long HEARTBEAT_PUBLISH_MS = 4_000L;
@@ -448,6 +450,7 @@ public final class TongpinNotificationListener extends NotificationListenerServi
     private void handlePendingCommand(JSONObject json) {
         String id = json.optString("id", "");
         if (id.isEmpty()) return;
+        Log.d(TAG, "received pendingCommand id=" + id + " type=" + json.optString("type", ""));
 
         String lastId = Prefs.lastCommandId(this);
         String lastStatus = Prefs.lastCommandStatus(this);
@@ -472,6 +475,7 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                 json.optString("title", ""),
                 json.optString("artist", "")
         );
+        Log.d(TAG, "command.type=" + command.type + " query=" + command.query + " title=" + command.title);
 
         commandNetwork.execute(() -> {
             try {
@@ -546,16 +550,22 @@ public final class TongpinNotificationListener extends NotificationListenerServi
     private boolean dispatchCommand(RemoteCommand command, boolean fallbackOnly) {
         try {
             if ("search_play".equals(command.type)) {
+                Log.d(TAG, "dispatch search_play fallbackOnly=" + fallbackOnly + " controller=" + (controller != null));
                 if (!fallbackOnly && controller != null && !command.query.isEmpty()) {
+                    Log.d(TAG, "calling MediaSession.playFromSearch query=" + command.query);
                     controller.getTransportControls().playFromSearch(command.query, Bundle.EMPTY);
+                    Log.d(TAG, "MediaSession.playFromSearch dispatched without exception");
                     return true;
                 }
-                return QQMusicLyricsAccessibilityService.requestSearchAndPlay(
+                Log.d(TAG, "entering QQMusicLyricsAccessibilityService fallback");
+                boolean fallbackStarted = QQMusicLyricsAccessibilityService.requestSearchAndPlay(
                         command.id,
                         command.query,
                         command.title,
                         command.artist
                 );
+                Log.d(TAG, "QQMusicLyricsAccessibilityService fallback result=" + fallbackStarted);
+                return fallbackStarted;
             }
 
             if ("seek".equals(command.type)) {
