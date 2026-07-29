@@ -555,7 +555,6 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                     Log.d(TAG, "calling MediaSession.playFromSearch query=" + command.query);
                     controller.getTransportControls().playFromSearch(command.query, Bundle.EMPTY);
                     Log.d(TAG, "MediaSession.playFromSearch dispatched without exception");
-                    return true;
                 }
                 Log.d(TAG, "entering QQMusicLyricsAccessibilityService fallback");
                 boolean fallbackStarted = QQMusicLyricsAccessibilityService.requestSearchAndPlay(
