@@ -76,6 +76,7 @@ public final class MainActivity extends Activity {
     private static final int TAB_PLAY = 0;
     private static final int TAB_NOTES = 1;
     private static final int TAB_SETTINGS = 2;
+    private static final int TAB_CHAT = 3;
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private Palette palette;
@@ -99,6 +100,10 @@ public final class MainActivity extends Activity {
     private TextView diagnosticsText;
     private TextView notesHintText;
     private TextView notesFilterChip;
+    private TextView chatSongTitle;
+    private TextView chatSongArtist;
+    private TextView chatLyricText;
+    private TextView chatMessagesText;
     private LinearLayout notesList;
     private TextView artworkFallback;
     private ImageView artworkView;
@@ -113,11 +118,13 @@ public final class MainActivity extends Activity {
     private Button navPlayButton;
     private Button navNotesButton;
     private Button navSettingsButton;
+    private Button navChatButton;
     private Button clearManualLyricsButton;
     private TextView manualLyricsHintText;
     private LinearLayout playerSection;
     private LinearLayout notesSection;
     private LinearLayout settingsSection;
+    private LinearLayout chatSection;
     private boolean notesCurrentOnly = true;
 
     private final Runnable refreshRunnable = new Runnable() {
@@ -231,6 +238,11 @@ public final class MainActivity extends Activity {
         notesSection.addView(buildNotesCard());
         root.addView(notesSection, matchWrap());
 
+        chatSection = new LinearLayout(this);
+        chatSection.setOrientation(LinearLayout.VERTICAL);
+        chatSection.addView(buildChatCard());
+        root.addView(chatSection, matchWrap());
+
         settingsSection = new LinearLayout(this);
         settingsSection.setOrientation(LinearLayout.VERTICAL);
         settingsSection.addView(buildRoomCard());
@@ -307,9 +319,11 @@ public final class MainActivity extends Activity {
         nav.setBackground(navGlassBackground());
         navPlayButton = navButton("播放", () -> switchTab(TAB_PLAY));
         navNotesButton = navButton("笔记", () -> switchTab(TAB_NOTES));
+        navChatButton = navButton("陪听", () -> switchTab(TAB_CHAT));
         navSettingsButton = navButton("设置", () -> switchTab(TAB_SETTINGS));
         nav.addView(navPlayButton);
         nav.addView(navNotesButton);
+        nav.addView(navChatButton);
         nav.addView(navSettingsButton);
         return nav;
     }
@@ -341,9 +355,11 @@ public final class MainActivity extends Activity {
     private void updateActiveTab() {
         setVisible(playerSection, activeTab == TAB_PLAY);
         setVisible(notesSection, activeTab == TAB_NOTES);
+        setVisible(chatSection, activeTab == TAB_CHAT);
         setVisible(settingsSection, activeTab == TAB_SETTINGS);
         updateNavButton(navPlayButton, activeTab == TAB_PLAY);
         updateNavButton(navNotesButton, activeTab == TAB_NOTES);
+        updateNavButton(navChatButton, activeTab == TAB_CHAT);
         updateNavButton(navSettingsButton, activeTab == TAB_SETTINGS);
     }
 
@@ -542,6 +558,74 @@ public final class MainActivity extends Activity {
         notesList = new LinearLayout(this);
         notesList.setOrientation(LinearLayout.VERTICAL);
         card.addView(notesList, matchWrap());
+        return card;
+    }
+
+    private View buildChatCard() {
+        LinearLayout card = playbackCard();
+        card.addView(sectionTitle("AI陪听"));
+
+        LinearLayout contextBox = new LinearLayout(this);
+        contextBox.setOrientation(LinearLayout.VERTICAL);
+        contextBox.setPadding(dp(14), dp(12), dp(14), dp(12));
+        contextBox.setBackground(rounded(
+                translucent(blend(palette.surface, palette.surfaceAlt, 0.30f), glassAlpha(palette.dark ? 156 : 172)),
+                translucent(blend(Color.WHITE, palette.accent, 0.10f), Math.max(52, glassAlpha(104))),
+                18
+        ));
+        card.addView(contextBox, matchWrap());
+
+        TextView contextLabel = text("当前音乐", 12f, palette.secondary, true);
+        contextBox.addView(contextLabel);
+        chatSongTitle = text("等待播放器", 20f, palette.text, true);
+        chatSongTitle.setPadding(0, dp(8), 0, 0);
+        chatSongTitle.setMaxLines(2);
+        contextBox.addView(chatSongTitle, matchWrap());
+        chatSongArtist = text("播放歌曲后，这里会显示歌手信息", 13f, palette.secondary, false);
+        chatSongArtist.setPadding(0, dp(4), 0, 0);
+        chatSongArtist.setMaxLines(2);
+        contextBox.addView(chatSongArtist, matchWrap());
+        chatLyricText = text("当前歌词会显示在这里", 15f, palette.text, true);
+        chatLyricText.setPadding(0, dp(12), 0, 0);
+        chatLyricText.setMaxLines(3);
+        contextBox.addView(chatLyricText, matchWrap());
+
+        TextView chatLabel = text("陪听对话", 12f, palette.secondary, true);
+        chatLabel.setPadding(0, dp(16), 0, dp(8));
+        card.addView(chatLabel, matchWrap());
+
+        LinearLayout messagesBox = new LinearLayout(this);
+        messagesBox.setOrientation(LinearLayout.VERTICAL);
+        messagesBox.setPadding(dp(14), dp(12), dp(14), dp(12));
+        messagesBox.setMinimumHeight(dp(148));
+        messagesBox.setBackground(rounded(
+                translucent(blend(palette.surface, palette.background, 0.22f), glassAlpha(palette.dark ? 118 : 132)),
+                translucent(blend(Color.WHITE, palette.accent, 0.08f), Math.max(44, glassAlpha(88))),
+                18
+        ));
+        chatMessagesText = text("AI聊天功能开发中。\n之后会在这里一起聊当前歌曲、歌词和听歌记忆。", 13f, palette.secondary, false);
+        chatMessagesText.setLineSpacing(dp(2), 1.18f);
+        messagesBox.addView(chatMessagesText, matchWrap());
+        card.addView(messagesBox, matchWrap());
+
+        LinearLayout inputRow = new LinearLayout(this);
+        inputRow.setOrientation(LinearLayout.HORIZONTAL);
+        inputRow.setGravity(Gravity.CENTER_VERTICAL);
+        inputRow.setPadding(0, dp(12), 0, 0);
+        EditText input = field("", "想和 AI 聊这首歌...");
+        input.setSingleLine(false);
+        input.setMinLines(1);
+        input.setMaxLines(3);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        inputParams.setMarginEnd(dp(8));
+        inputRow.addView(input, inputParams);
+        Button sendButton = actionButton("发送", () -> {
+            chatMessagesText.setText("AI聊天功能开发中。\n当前页面已经准备好，后续会接入陪听聊天服务。");
+            toast("AI聊天功能开发中");
+        }, true);
+        inputRow.addView(sendButton, new LinearLayout.LayoutParams(dp(76), dp(44)));
+        card.addView(inputRow, matchWrap());
         return card;
     }
 
@@ -912,6 +996,15 @@ public final class MainActivity extends Activity {
             String source = playback.lyricsSource.isEmpty() ? "等待同步歌词" : playback.lyricsSource;
             lyricText.setText(source);
             nextLyricText.setText(source.contains("加载") ? "正在为当前歌曲匹配时间轴歌词" : "可点击“重试歌词”再次匹配");
+        }
+        if (chatSongTitle != null) {
+            chatSongTitle.setText(playback.title);
+            chatSongArtist.setText(playback.artist.isEmpty() ? "等待歌手信息" : playback.artist);
+            if (playback.lyricsSynced) {
+                chatLyricText.setText(playback.lyric.isEmpty() ? "♪ 前奏 / 间奏" : playback.lyric);
+            } else {
+                chatLyricText.setText(playback.lyricsSource.isEmpty() ? "等待同步歌词" : playback.lyricsSource);
+            }
         }
 
         Bitmap artwork = TongpinNotificationListener.currentArtwork();
