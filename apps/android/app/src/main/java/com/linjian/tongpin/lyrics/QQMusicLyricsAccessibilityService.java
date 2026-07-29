@@ -67,6 +67,7 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
     private String activePackage = "";
     private long lastOcrAt;
     private SearchRequest searchRequest;
+    private String lastAutomationActiveWindow = "";
 
     private final Runnable periodicScan = new Runnable() {
         @Override
@@ -170,6 +171,7 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
 
     private void beginSearchAutomation(SearchRequest request) {
         searchRequest = request;
+        lastAutomationActiveWindow = "";
         Log.d(TAG, "beginSearchAutomation commandId=" + request.commandId + " query=" + request.query);
         Prefs.saveStatus(this, "自动点歌 · 正在打开 QQ 音乐");
         launchQqMusic();
@@ -201,22 +203,29 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         SearchRequest request = searchRequest;
         if (request == null) return;
         try {
-            Log.d(TAG, "launchQqMusic executing");
+            Log.d(TAG, "launchQqMusic executing commandId=" + request.commandId);
             Intent intent = getPackageManager().getLaunchIntentForPackage(QQ_MUSIC);
             if (intent == null) {
                 Log.w(TAG, "launchQqMusic failed because launch intent is null");
                 return;
             }
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
             startActivity(intent);
             request.launchedUi = true;
             request.lastLaunchAt = System.currentTimeMillis();
-            AccessibilityNodeInfo root = getRootInActiveWindow();
-            Log.d(TAG, "launchQqMusic after startActivity activeWindow=" + rootState(root));
+            Log.d(TAG, "launchQqMusic startActivity returned without exception");
+            handler.postDelayed(() -> logActiveWindow("launchQqMusic activeWindow after 350ms"), 350L);
+            handler.postDelayed(() -> logActiveWindow("launchQqMusic activeWindow after 900ms"), 900L);
         } catch (Throwable error) {
             Log.w(TAG, "launchQqMusic failed", error);
             Prefs.saveStatus(this, "自动点歌 · 无法打开 QQ 音乐");
         }
+    }
+
+    private void logActiveWindow(String label) {
+        Log.d(TAG, label + "=" + rootState(getRootInActiveWindow()));
     }
 
     private static String rootState(AccessibilityNodeInfo root) {
@@ -236,8 +245,13 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         }
 
         AccessibilityNodeInfo root = getRootInActiveWindow();
+        String activeWindow = rootState(root);
+        if (!activeWindow.equals(lastAutomationActiveWindow)) {
+            Log.d(TAG, "activeWindow changed " + lastAutomationActiveWindow + " -> " + activeWindow);
+            lastAutomationActiveWindow = activeWindow;
+        }
         if (root == null || root.getPackageName() == null || !QQ_MUSIC.contentEquals(root.getPackageName())) {
-            Log.d(TAG, "runSearchAutomation waiting for QQ Music active window root=" + rootState(root));
+            Log.d(TAG, "runSearchAutomation waiting for QQ Music active window root=" + activeWindow);
             if (now - request.lastLaunchAt > 1_800L) launchQqMusic();
             return;
         }
