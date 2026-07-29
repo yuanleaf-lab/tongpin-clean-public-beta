@@ -16,14 +16,22 @@ export class AiRequestError extends Error {
 }
 
 const apiKey = (): string => {
-  const value = process.env.OPENAI_API_KEY?.trim();
-  if (!value) {
-    throw new AiConfigurationError('OPENAI_API_KEY is required before calling askAI.');
-  }
-  return value;
+  return process.env.OPENAI_API_KEY?.trim() ?? '';
 };
 
 const model = (): string => process.env.AI_MODEL?.trim() || DEFAULT_MODEL;
+
+const userMessageFromPrompt = (prompt: string): string => {
+  const marker = '用户消息：';
+  const index = prompt.lastIndexOf(marker);
+  if (index === -1) return prompt;
+  return prompt.slice(index + marker.length).trim();
+};
+
+const mockReply = (prompt: string): string => {
+  const message = userMessageFromPrompt(prompt).slice(0, 500);
+  return `共听开发模式已收到你的消息：${message}。当前还未连接真实 AI。`;
+};
 
 const extractOutputText = (body: unknown): string => {
   if (!body || typeof body !== 'object') return '';
@@ -48,11 +56,13 @@ const extractOutputText = (body: unknown): string => {
 export async function askAI(prompt: string): Promise<string> {
   const cleanPrompt = prompt.trim();
   if (!cleanPrompt) throw new AiRequestError('prompt is required before calling askAI.');
+  const key = apiKey();
+  if (!key) return mockReply(cleanPrompt);
 
   const response = await fetch(OPENAI_RESPONSES_URL, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${apiKey()}`,
+      authorization: `Bearer ${key}`,
       'content-type': 'application/json'
     },
     body: JSON.stringify({
