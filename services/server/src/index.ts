@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express from 'express';
+import { AiConfigurationError, AiRequestError, askAI } from './ai.js';
 import { handleMcpRequest } from './mcp.js';
 import { RoomStore } from './store.js';
 import { playerNameOf, toPublicRoom, type CommandStatus, type PlaybackCommandType, type PlaybackSnapshot } from './types.js';
@@ -27,6 +28,46 @@ const secretOf = (req: express.Request): string => {
 const text = (value: unknown, limit: number): string | undefined => {
   if (value === undefined || value === null) return undefined;
   return String(value).slice(0, limit);
+};
+
+const formatTime = (ms: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
+const buildChatPrompt = (room: ReturnType<typeof toPublicRoom>, message: string): string => {
+  const playback = room.playback;
+  const songTitle = playback?.title?.trim() || '未知歌曲';
+  const memories = room.notes
+    .filter(note => note.trackTitle.trim().toLocaleLowerCase() === songTitle.trim().toLocaleLowerCase())
+    .slice(-5)
+    .reverse()
+    .map(note => `- ${new Date(note.createdAt).toISOString()} @ ${formatTime(note.positionMs)}: ${note.text}`)
+    .join('\n') || '暂无历史听歌记录';
+
+  return [
+    '你是同频 Clean 的“共听”聊天助手。',
+    '你陪用户聊当前正在听的歌、当前歌词和过去留下的听歌记录。',
+    '回复要自然、简洁、有陪伴感；不要假装知道没有提供的信息；不要替用户下确定心理结论。',
+    '',
+    '当前歌曲上下文：',
+    `- 歌曲：${songTitle}`,
+    `- 歌手：${playback?.artist || '未知歌手'}`,
+    `- 专辑：${playback?.album || '未知专辑'}`,
+    `- 播放器：${playback?.playerName || '未知播放器'}`,
+    `- 播放状态：${playback?.playing ? '正在播放' : '已暂停或未播放'}`,
+    `- 播放进度：${formatTime(playback?.positionMs ?? 0)}`,
+    `- 当前歌词：${playback?.lyric || '暂无当前歌词'}`,
+    `- 下一句歌词：${playback?.nextLyric || '暂无下一句歌词'}`,
+    '',
+    '这首歌最近的听歌记录：',
+    memories,
+    '',
+    '用户消息：',
+    message
+  ].join('\n');
 };
 
 app.get('/', (_req, res) => res.redirect('/control'));
@@ -144,6 +185,30 @@ app.post('/api/rooms/:code/notes', async (req, res) => {
     const room = await store.addNote(req.params.code, secretOf(req), noteText, positionMs);
     res.json(toPublicRoom(room));
   } catch {
+    res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
+  }
+});
+
+app.post('/api/rooms/:code/chat', async (req, res) => {
+  try {
+    const message = String(req.body?.message ?? '').trim();
+    if (!message || message.length > 1_000) {
+      res.status(400).json({ error: 'INVALID_MESSAGE' });
+      return;
+    }
+    const roomSecret = secretOf(req) || String(req.body?.roomSecret ?? '').trim();
+    const room = toPublicRoom(store.authenticate(req.params.code, roomSecret));
+    const reply = await askAI(buildChatPrompt(room, message));
+    res.json({ ok: true, reply });
+  } catch (error) {
+    if (error instanceof AiConfigurationError) {
+      res.status(503).json({ error: 'AI_NOT_CONFIGURED', message: error.message });
+      return;
+    }
+    if (error instanceof AiRequestError) {
+      res.status(502).json({ error: 'AI_REQUEST_FAILED', message: error.message });
+      return;
+    }
     res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
   }
 });
