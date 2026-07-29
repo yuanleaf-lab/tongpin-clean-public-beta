@@ -563,7 +563,7 @@ public final class MainActivity extends Activity {
 
     private View buildChatCard() {
         LinearLayout card = playbackCard();
-        card.addView(sectionTitle("AI陪听"));
+        card.addView(sectionTitle("共听"));
 
         LinearLayout contextBox = new LinearLayout(this);
         contextBox.setOrientation(LinearLayout.VERTICAL);
@@ -590,7 +590,7 @@ public final class MainActivity extends Activity {
         chatLyricText.setMaxLines(3);
         contextBox.addView(chatLyricText, matchWrap());
 
-        TextView chatLabel = text("陪听对话", 12f, palette.secondary, true);
+        TextView chatLabel = text("共听对话", 12f, palette.secondary, true);
         chatLabel.setPadding(0, dp(16), 0, dp(8));
         card.addView(chatLabel, matchWrap());
 
@@ -603,7 +603,7 @@ public final class MainActivity extends Activity {
                 translucent(blend(Color.WHITE, palette.accent, 0.08f), Math.max(44, glassAlpha(88))),
                 18
         ));
-        chatMessagesText = text("AI聊天功能开发中。\n之后会在这里一起聊当前歌曲、歌词和听歌记忆。", 13f, palette.secondary, false);
+        chatMessagesText = text("一起听歌，一起聊歌。\n这里会记录你和音乐相遇的瞬间。", 13f, palette.secondary, false);
         chatMessagesText.setLineSpacing(dp(2), 1.18f);
         messagesBox.addView(chatMessagesText, matchWrap());
         card.addView(messagesBox, matchWrap());
@@ -612,7 +612,7 @@ public final class MainActivity extends Activity {
         inputRow.setOrientation(LinearLayout.HORIZONTAL);
         inputRow.setGravity(Gravity.CENTER_VERTICAL);
         inputRow.setPadding(0, dp(12), 0, 0);
-        EditText input = field("", "想和 AI 聊这首歌...");
+        EditText input = field("", "想聊聊这首歌...");
         input.setSingleLine(false);
         input.setMinLines(1);
         input.setMaxLines(3);
@@ -621,8 +621,8 @@ public final class MainActivity extends Activity {
         inputParams.setMarginEnd(dp(8));
         inputRow.addView(input, inputParams);
         Button sendButton = actionButton("发送", () -> {
-            chatMessagesText.setText("AI聊天功能开发中。\n当前页面已经准备好，后续会接入陪听聊天服务。");
-            toast("AI聊天功能开发中");
+            chatMessagesText.setText("一起听歌，一起聊歌。\n这里会记录你和音乐相遇的瞬间。");
+            toast("共听对话暂未开放");
         }, true);
         inputRow.addView(sendButton, new LinearLayout.LayoutParams(dp(76), dp(44)));
         card.addView(inputRow, matchWrap());
