@@ -9,6 +9,8 @@ const textResult = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
 });
 
+const normalizeSongKey = (value: string): string => value.trim().toLocaleLowerCase();
+
 export function createMcpServer(store: RoomStore): McpServer {
   const server = new McpServer({ name: 'tongpin-clean', version: '1.3.1' });
 
@@ -134,6 +136,41 @@ export function createMcpServer(store: RoomStore): McpServer {
     try {
       const room = await store.addNote(code, roomSecret, text, positionMs);
       return textResult({ ok: true, note: room.notes.at(-1) });
+    } catch {
+      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+    }
+  });
+
+  server.registerTool('get_song_memory', {
+    title: '查询歌曲听歌记忆',
+    description: '查询当前同频房间里某首歌曲过去留下的听歌笔记。当用户询问“我以前听这首歌的时候说过什么”“这首歌有什么回忆”“我有没有记录过这首歌”等历史记忆问题时，可以调用本工具。当前依据 notes 中保存的歌曲标题 trackTitle 匹配历史笔记；artist 用于表达目标歌曲但暂不参与过滤，因为当前 notes 结构不保存歌手。未来如果 notes 保存 artist，可进一步提高匹配精度。',
+    inputSchema: {
+      code: z.string().min(6),
+      roomSecret: z.string().min(10),
+      title: z.string().min(1).max(200),
+      artist: z.string().min(1).max(200)
+    }
+  }, async ({ code, roomSecret, title, artist }) => {
+    try {
+      const cleanTitle = title.trim();
+      const cleanArtist = artist.trim();
+      const room = store.authenticate(code, roomSecret);
+      const targetTitle = normalizeSongKey(cleanTitle);
+      const memories = room.notes
+        .filter(note => normalizeSongKey(note.trackTitle) === targetTitle)
+        .map(note => ({
+          text: note.text,
+          positionMs: note.positionMs,
+          createdAt: note.createdAt
+        }));
+      return textResult({
+        ok: true,
+        song: {
+          title: cleanTitle,
+          artist: cleanArtist
+        },
+        memories
+      });
     } catch {
       return textResult({ ok: false, error: '房间不存在或密钥错误' });
     }
