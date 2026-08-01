@@ -319,10 +319,12 @@ public final class TongpinNotificationListener extends NotificationListenerServi
         String album = metadataText(metadata, MediaMetadata.METADATA_KEY_ALBUM);
         long duration = metadata == null ? 0L : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
 
-        if (title.isEmpty() && current.getPackageName().equals(previous.packageName)) title = previous.title;
-        if (artist.isEmpty() && current.getPackageName().equals(previous.packageName)) artist = previous.artist;
-        if (album.isEmpty() && current.getPackageName().equals(previous.packageName)) album = previous.album;
-        if (duration <= 0L && current.getPackageName().equals(previous.packageName)) duration = previous.durationMs;
+        boolean samePackage = current.getPackageName().equals(previous.packageName);
+        boolean sameTrack = samePackage && sameTrackIdentity(title, artist, previous);
+        if (title.isEmpty() && samePackage) title = previous.title;
+        if (artist.isEmpty() && samePackage) artist = previous.artist;
+        if (album.isEmpty() && sameTrack) album = previous.album;
+        if (duration <= 0L && samePackage) duration = previous.durationMs;
 
         String safeTitle = title.isEmpty() ? "未知歌曲" : title;
         String safeArtist = artist.isEmpty() ? "未知歌手" : artist;
@@ -696,6 +698,18 @@ public final class TongpinNotificationListener extends NotificationListenerServi
             default:
                 return false;
         }
+    }
+
+    private static boolean sameTrackIdentity(String title, String artist, PlaybackSnapshot previous) {
+        if (previous == null) return false;
+        String currentTitle = normalizeForMatch(title);
+        String previousTitle = normalizeForMatch(previous.title);
+        if (currentTitle.isEmpty() || previousTitle.isEmpty() || !currentTitle.equals(previousTitle)) {
+            return false;
+        }
+        String currentArtist = normalizeForMatch(artist);
+        String previousArtist = normalizeForMatch(previous.artist);
+        return currentArtist.isEmpty() || previousArtist.isEmpty() || currentArtist.equals(previousArtist);
     }
 
     private void finishCommand(RemoteCommand command, boolean remote, boolean success, String message) {

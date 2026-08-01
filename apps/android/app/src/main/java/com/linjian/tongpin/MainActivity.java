@@ -1025,8 +1025,9 @@ public final class MainActivity extends Activity {
         long position = liveDisplayPosition(playback);
         songTitle.setText(playback.title);
         songArtist.setText(playback.artist);
-        songAlbum.setText(playback.album.isEmpty() ? "" : playback.album);
-        songAlbum.setVisibility(playback.album.isEmpty() ? View.GONE : View.VISIBLE);
+        String meta = playbackMeta(playback);
+        songAlbum.setText(meta);
+        songAlbum.setVisibility(meta.isEmpty() ? View.GONE : View.VISIBLE);
         timeText.setText(formatTime(position) + " / " + formatTime(playback.durationMs));
         int progress = playback.durationMs > 0L
                 ? (int) Math.min(1000L, Math.round(position * 1000.0 / playback.durationMs))
@@ -1044,9 +1045,10 @@ public final class MainActivity extends Activity {
         }
         if (clearManualLyricsButton != null) clearManualLyricsButton.setEnabled(hasManualLyrics);
 
-        if (playback.lyricsSynced) {
-            lyricText.setText(playback.lyric.isEmpty() ? "♪ 前奏 / 间奏" : playback.lyric);
-            nextLyricText.setText(playback.nextLyric.isEmpty() ? "" : "下一句 · " + playback.nextLyric);
+        boolean hasLyricText = !clean(playback.lyric).isEmpty() || !clean(playback.nextLyric).isEmpty();
+        if (playback.lyricsSynced || hasLyricText) {
+            lyricText.setText(clean(playback.lyric).isEmpty() ? "♪ 前奏 / 间奏" : playback.lyric);
+            nextLyricText.setText(clean(playback.nextLyric).isEmpty() ? "" : "下一句 · " + playback.nextLyric);
         } else {
             String source = playback.lyricsSource.isEmpty() ? "等待同步歌词" : playback.lyricsSource;
             lyricText.setText(source);
@@ -1055,8 +1057,8 @@ public final class MainActivity extends Activity {
         if (chatSongTitle != null) {
             chatSongTitle.setText(playback.title);
             chatSongArtist.setText(playback.artist.isEmpty() ? "等待歌手信息" : playback.artist);
-            if (playback.lyricsSynced) {
-                chatLyricText.setText(playback.lyric.isEmpty() ? "♪ 前奏 / 间奏" : playback.lyric);
+            if (playback.lyricsSynced || hasLyricText) {
+                chatLyricText.setText(clean(playback.lyric).isEmpty() ? "♪ 前奏 / 间奏" : playback.lyric);
             } else {
                 chatLyricText.setText(playback.lyricsSource.isEmpty() ? "等待同步歌词" : playback.lyricsSource);
             }
@@ -1966,6 +1968,20 @@ public final class MainActivity extends Activity {
 
     private static String clean(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static String playbackMeta(PlaybackSnapshot playback) {
+        if (playback == null) return "";
+        String packageName = clean(playback.packageName);
+        String player = packageName.isEmpty() ? "" : clean(PlayerCatalog.displayName(packageName));
+        String album = clean(playback.album);
+        if (album.equals(clean(playback.title)) || album.equals(clean(playback.artist))) {
+            album = "";
+        }
+        if (player.equals(packageName)) player = "";
+        if (!player.isEmpty() && !album.isEmpty()) return player + " · " + album;
+        if (!player.isEmpty()) return player;
+        return album;
     }
 
     private static long liveDisplayPosition(PlaybackSnapshot playback) {
