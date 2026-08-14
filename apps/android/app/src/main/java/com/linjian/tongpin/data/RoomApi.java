@@ -142,11 +142,25 @@ public final class RoomApi {
         String server = Prefs.server(context);
         RoomCredentials room = Prefs.room(context);
         if (room.code.isEmpty() || room.secret.isEmpty()) return;
+        acknowledgeCommandSync(server, room.code, room.secret, commandId, status, message);
+    }
+
+    public static void acknowledgeCommandSync(
+            String server,
+            String roomCode,
+            String roomSecret,
+            String commandId,
+            String status,
+            String message
+    ) throws Exception {
+        if (server == null || server.isEmpty() || roomCode == null || roomCode.isEmpty() || roomSecret == null || roomSecret.isEmpty()) {
+            return;
+        }
         JSONObject body = new JSONObject().put("status", status).put("message", message);
         request(
                 "POST",
-                server + "/api/rooms/" + room.code + "/commands/" + commandId + "/ack",
-                room.secret,
+                server + "/api/rooms/" + roomCode + "/commands/" + commandId + "/ack",
+                roomSecret,
                 body
         );
     }

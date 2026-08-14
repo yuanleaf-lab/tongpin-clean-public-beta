@@ -473,9 +473,16 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                 positionMs,
                 json.optString("query", ""),
                 json.optString("title", ""),
-                json.optString("artist", "")
+                json.optString("artist", ""),
+                json.optString("targetCode", ""),
+                json.optString("targetSecret", "")
         );
         Log.d(TAG, "command.type=" + command.type + " query=" + command.query + " title=" + command.title);
+
+        if ("switch_room".equals(command.type)) {
+            handleSwitchRoomCommand(command);
+            return;
+        }
 
         commandNetwork.execute(() -> {
             try {
@@ -489,6 +496,55 @@ public final class TongpinNotificationListener extends NotificationListenerServi
             }
         });
         mainHandler.post(() -> startCommandExecution(command, true));
+    }
+
+    private void handleSwitchRoomCommand(RemoteCommand command) {
+        String oldServer = Prefs.server(this);
+        RoomCredentials oldRoom = Prefs.room(this);
+        commandNetwork.execute(() -> {
+            String status = "executed";
+            String message = "房间已切换";
+            try {
+                RoomApi.acknowledgeCommandSync(
+                        oldServer,
+                        oldRoom.code,
+                        oldRoom.secret,
+                        command.id,
+                        "received",
+                        "手机已收到切换房间命令"
+                );
+                if (command.targetCode.isEmpty() || command.targetSecret.isEmpty()) {
+                    status = "failed";
+                    message = "切换失败：目标房间凭据缺失";
+                    return;
+                }
+                Prefs.saveRoom(
+                        TongpinNotificationListener.this,
+                        new RoomCredentials(command.targetCode, command.targetSecret)
+                );
+                Prefs.saveStatus(TongpinNotificationListener.this, message);
+            } catch (Throwable error) {
+                status = "failed";
+                message = "切换失败：" + safeMessage(error);
+            } finally {
+                Prefs.saveLastCommandId(TongpinNotificationListener.this, command.id);
+                Prefs.saveLastCommandStatus(TongpinNotificationListener.this, status);
+                Prefs.saveLastCommandResult(TongpinNotificationListener.this, message);
+                try {
+                    RoomApi.acknowledgeCommandSync(
+                            oldServer,
+                            oldRoom.code,
+                            oldRoom.secret,
+                            command.id,
+                            status,
+                            message
+                    );
+                } catch (Throwable ignored) {
+                } finally {
+                    commandInFlight.compareAndSet(command.id, "");
+                }
+            }
+        });
     }
 
     private void startCommandExecution(RemoteCommand command, boolean remote) {
