@@ -57,10 +57,54 @@ export function createMcpServer(store: RoomStore): McpServer {
   server.registerTool('create_room', {
     title: '创建同频房间',
     description: '创建新的共同听歌房间，返回房间码与私密密钥。适用于 ChatGPT、Claude、Gemini SDK 或其他支持 MCP 的 AI 客户端。',
-    inputSchema: {}
-  }, async () => {
+    inputSchema: {
+      currentCode: z.string().optional(),
+      currentRoomSecret: z.string().optional()
+    }
+  }, async ({ currentCode, currentRoomSecret }) => {
+    const cleanCurrentCode = currentCode?.trim().toUpperCase() ?? '';
+    const cleanCurrentRoomSecret = currentRoomSecret?.trim() ?? '';
+    if ((cleanCurrentCode && !cleanCurrentRoomSecret) || (!cleanCurrentCode && cleanCurrentRoomSecret)) {
+      return textResult({
+        ok: false,
+        error: 'currentCode 和 currentRoomSecret 必须同时提供；未创建新房间'
+      });
+    }
+
     const room = await store.create();
-    return textResult({ ok: true, code: room.code, roomSecret: room.secret });
+    if (!cleanCurrentCode && !cleanCurrentRoomSecret) {
+      return textResult({
+        ok: true,
+        code: room.code,
+        roomSecret: room.secret,
+        switchQueued: false,
+        switchMessage: '已创建新房间；未提供旧房间信息，手机不会自动切换'
+      });
+    }
+
+    try {
+      const switched = await store.setCommand(cleanCurrentCode, cleanCurrentRoomSecret, {
+        type: 'switch_room',
+        targetCode: room.code,
+        targetSecret: room.secret
+      });
+      return textResult({
+        ok: true,
+        code: room.code,
+        roomSecret: room.secret,
+        switchQueued: true,
+        switchCommandId: switched.pendingCommand?.id,
+        switchMessage: '已创建新房间，并已向旧房间写入切换命令'
+      });
+    } catch {
+      return textResult({
+        ok: true,
+        code: room.code,
+        roomSecret: room.secret,
+        switchQueued: false,
+        switchMessage: '已创建新房间；旧房间不存在、密钥错误或切换命令写入失败，手机未自动切换'
+      });
+    }
   });
 
   server.registerTool('get_room', {
