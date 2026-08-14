@@ -128,7 +128,7 @@ app.post('/api/rooms/:code/playback', async (req, res) => {
 app.post('/api/rooms/:code/commands', async (req, res) => {
   try {
     const type = req.body?.type as PlaybackCommandType;
-    if (!['play', 'pause', 'seek', 'next', 'previous', 'search_play'].includes(type)) {
+    if (!['play', 'pause', 'seek', 'next', 'previous', 'search_play', 'switch_room'].includes(type)) {
       res.status(400).json({ error: 'INVALID_COMMAND' });
       return;
     }
@@ -146,12 +146,20 @@ app.post('/api/rooms/:code/commands', async (req, res) => {
       res.status(400).json({ error: 'INVALID_SEARCH_QUERY' });
       return;
     }
+    const targetCode = type === 'switch_room' ? String(req.body?.targetCode ?? '').trim().toUpperCase() : undefined;
+    const targetSecret = type === 'switch_room' ? String(req.body?.targetSecret ?? '').trim() : undefined;
+    if (type === 'switch_room' && (!targetCode || !targetSecret)) {
+      res.status(400).json({ error: 'INVALID_SWITCH_ROOM_TARGET' });
+      return;
+    }
     const room = await store.setCommand(req.params.code, secretOf(req), {
       type,
       positionMs,
       query,
       title,
-      artist: artist || undefined
+      artist: artist || undefined,
+      targetCode,
+      targetSecret
     });
     res.json(toPublicRoom(room));
   } catch {

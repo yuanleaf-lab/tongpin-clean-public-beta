@@ -1,4 +1,4 @@
-export type PlaybackCommandType = 'play' | 'pause' | 'seek' | 'next' | 'previous' | 'search_play';
+export type PlaybackCommandType = 'play' | 'pause' | 'seek' | 'next' | 'previous' | 'search_play' | 'switch_room';
 export type CommandStatus = 'queued' | 'received' | 'executed' | 'failed';
 
 export interface PlaybackCommand {
@@ -8,6 +8,8 @@ export interface PlaybackCommand {
   query?: string;
   title?: string;
   artist?: string;
+  targetCode?: string;
+  targetSecret?: string;
   createdAt: number;
 }
 
