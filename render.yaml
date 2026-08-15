@@ -13,3 +13,7 @@ services:
         value: 22
       - key: DATA_FILE
         value: /tmp/tongpin-rooms.json
+      - key: AI_ENDPOINT_MODE
+        value: chat_completions
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
