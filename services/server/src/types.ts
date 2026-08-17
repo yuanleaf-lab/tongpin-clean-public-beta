@@ -52,6 +52,7 @@ export interface Room {
   createdAt: number;
   updatedAt: number;
   revision: number;
+  listeningDurationMs: number;
   playback: PlaybackSnapshot | null;
   pendingCommand: PlaybackCommand | null;
   lastCommandResult: CommandResult | null;
@@ -95,6 +96,7 @@ export const toPublicRoom = (room: Room): PublicRoom => ({
   createdAt: room.createdAt,
   updatedAt: room.updatedAt,
   revision: room.revision,
+  listeningDurationMs: room.listeningDurationMs ?? 0,
   playback: room.playback ? projectPlaybackPosition(room.playback) : null,
   pendingCommand: room.pendingCommand,
   lastCommandResult: room.lastCommandResult,

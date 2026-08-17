@@ -3,7 +3,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 import type { RoomStore } from './store.js';
-import { toPublicRoom, type PublicRoom } from './types.js';
+import { toPublicRoom, type PlaybackCommand, type PublicRoom, type Room } from './types.js';
+
+type RoomArgs = {
+  code?: string;
+  roomSecret?: string;
+};
+
+type McpAccess = {
+  canUseActiveRoom: boolean;
+};
+
+const optionalRoomCode = z.string().min(6).optional();
+const optionalRoomSecret = z.string().min(10).optional();
 
 const textResult = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
@@ -11,9 +23,51 @@ const textResult = (value: unknown) => ({
 
 const normalizeSongKey = (value: string): string => value.trim().toLocaleLowerCase();
 
+const sanitizeCommand = (command: PlaybackCommand | null): Omit<PlaybackCommand, 'targetSecret'> | null => {
+  if (!command) return null;
+  const { targetSecret: _targetSecret, ...safeCommand } = command;
+  return safeCommand;
+};
+
+const toMcpRoom = (room: Room): PublicRoom => {
+  const publicRoom = toPublicRoom(room);
+  return {
+    ...publicRoom,
+    pendingCommand: sanitizeCommand(publicRoom.pendingCommand)
+  } as PublicRoom;
+};
+
+const resolveRoom = (store: RoomStore, access: McpAccess, args: RoomArgs): Room => {
+  const code = args.code?.trim().toUpperCase() ?? '';
+  const roomSecret = args.roomSecret?.trim() ?? '';
+  if ((code && !roomSecret) || (!code && roomSecret)) {
+    throw new Error('ROOM_CREDENTIALS_INCOMPLETE');
+  }
+  if (code && roomSecret) return store.authenticate(code, roomSecret);
+  if (!access.canUseActiveRoom) throw new Error('ACTIVE_ROOM_OWNER_TOKEN_REQUIRED');
+  const room = store.activeRoom();
+  if (!room) throw new Error('ACTIVE_ROOM_NOT_AVAILABLE');
+  return room;
+};
+
+const roomError = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'ROOM_CREDENTIALS_INCOMPLETE') {
+    return 'code and roomSecret must be provided together, or connect to /mcp with MCP_OWNER_TOKEN to use the active room.';
+  }
+  if (message === 'ACTIVE_ROOM_OWNER_TOKEN_REQUIRED') {
+    return 'Missing code/roomSecret. Active room fallback requires an MCP_OWNER_TOKEN-protected /mcp connection.';
+  }
+  if (message === 'ACTIVE_ROOM_NOT_AVAILABLE') {
+    return 'No active room is available. Confirm the phone is syncing, or provide code/roomSecret explicitly.';
+  }
+  return 'Room not found or roomSecret is invalid.';
+};
+
 const currentContextOf = (room: PublicRoom) => {
   const playback = room.playback;
   return playback ? {
+    listeningDurationMs: room.listeningDurationMs,
     song: {
       title: playback.title,
       artist: playback.artist,
@@ -30,7 +84,12 @@ const currentContextOf = (room: PublicRoom) => {
       synced: playback.lyricsSynced,
       source: playback.lyricsSource
     }
-  } : null;
+  } : {
+    listeningDurationMs: room.listeningDurationMs,
+    song: null,
+    playback: null,
+    lyrics: null
+  };
 };
 
 const songMemoriesOf = (
@@ -51,12 +110,12 @@ const songMemoriesOf = (
   }));
 };
 
-export function createMcpServer(store: RoomStore): McpServer {
+export function createMcpServer(store: RoomStore, access: McpAccess = { canUseActiveRoom: false }): McpServer {
   const server = new McpServer({ name: 'tongpin-clean', version: '1.3.1' });
 
   server.registerTool('create_room', {
-    title: '创建同频房间',
-    description: '创建新的共同听歌房间，返回房间码与私密密钥。适用于 ChatGPT、Claude、Gemini SDK 或其他支持 MCP 的 AI 客户端。',
+    title: 'Create Tongpin room',
+    description: 'Create a new room. The MCP response intentionally does not expose roomSecret; use the phone switch flow or REST owner setup for room credentials.',
     inputSchema: {
       currentCode: z.string().optional(),
       currentRoomSecret: z.string().optional()
@@ -67,7 +126,7 @@ export function createMcpServer(store: RoomStore): McpServer {
     if ((cleanCurrentCode && !cleanCurrentRoomSecret) || (!cleanCurrentCode && cleanCurrentRoomSecret)) {
       return textResult({
         ok: false,
-        error: 'currentCode 和 currentRoomSecret 必须同时提供；未创建新房间'
+        error: 'currentCode and currentRoomSecret must be provided together; no new room was created.'
       });
     }
 
@@ -76,9 +135,8 @@ export function createMcpServer(store: RoomStore): McpServer {
       return textResult({
         ok: true,
         code: room.code,
-        roomSecret: room.secret,
         switchQueued: false,
-        switchMessage: '已创建新房间；未提供旧房间信息，手机不会自动切换'
+        switchMessage: 'New room created. The phone was not switched because no current room credentials were provided.'
       });
     }
 
@@ -91,84 +149,79 @@ export function createMcpServer(store: RoomStore): McpServer {
       return textResult({
         ok: true,
         code: room.code,
-        roomSecret: room.secret,
         switchQueued: true,
         switchCommandId: switched.pendingCommand?.id,
-        switchMessage: '已创建新房间，并已向旧房间写入切换命令'
+        switchMessage: 'New room created and a switch command was queued for the old room.'
       });
     } catch {
       return textResult({
         ok: true,
         code: room.code,
-        roomSecret: room.secret,
         switchQueued: false,
-        switchMessage: '已创建新房间；旧房间不存在、密钥错误或切换命令写入失败，手机未自动切换'
+        switchMessage: 'New room created, but the old room could not be authenticated so the phone was not switched.'
       });
     }
   });
 
   server.registerTool('get_room', {
-    title: '读取同频房间',
-    description: '读取同频房间的完整状态，适用于调试、管理和开发测试。返回完整房间数据，包括播放状态、命令执行结果和听歌笔记。它不是 AI 日常聊歌入口；当用户询问“我现在听什么歌”“这首歌怎么样”“这句歌词什么意思”或“帮我回忆这首歌”等当前歌曲聊天和记忆场景时，应统一优先使用 get_song_context。',
+    title: 'Read Tongpin room',
+    description: 'Read full room state. code/roomSecret are optional only when this MCP request is protected by MCP_OWNER_TOKEN and the phone has an active room.',
     inputSchema: {
-      code: z.string().min(6),
-      roomSecret: z.string().min(10)
+      code: optionalRoomCode,
+      roomSecret: optionalRoomSecret
     }
   }, async ({ code, roomSecret }) => {
     try {
-      return textResult({ ok: true, room: toPublicRoom(store.authenticate(code, roomSecret)) });
-    } catch {
-      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+      return textResult({ ok: true, room: toMcpRoom(resolveRoom(store, access, { code, roomSecret })) });
+    } catch (error) {
+      return textResult({ ok: false, error: roomError(error) });
     }
   });
 
   server.registerTool('get_current_context', {
-    title: '读取当前音乐上下文',
-    description: '只读取当前房间的实时音乐状态。适用于需要当前播放状态、播放进度 positionMs、当前歌词 lyric、下一句歌词 nextLyric、歌词同步状态和歌词来源的场景；不包含历史听歌记忆。如果用户想聊当前歌曲或回忆这首歌过去的记录，优先使用 get_song_context。',
+    title: 'Read current music context',
+    description: 'Read current playback, lyrics, and listeningDurationMs. code/roomSecret are optional only for MCP_OWNER_TOKEN-protected active room access.',
     inputSchema: {
-      code: z.string().min(6),
-      roomSecret: z.string().min(10)
+      code: optionalRoomCode,
+      roomSecret: optionalRoomSecret
     }
   }, async ({ code, roomSecret }) => {
     try {
-      const room = toPublicRoom(store.authenticate(code, roomSecret));
-      return textResult({
-        ok: true,
-        context: currentContextOf(room)
-      });
-    } catch {
-      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+      const room = toMcpRoom(resolveRoom(store, access, { code, roomSecret }));
+      return textResult({ ok: true, context: currentContextOf(room) });
+    } catch (error) {
+      return textResult({ ok: false, error: roomError(error) });
     }
   });
 
   server.registerTool('set_playback_command', {
-    title: '控制同频播放',
-    description: '向手机当前选中的播放器发送播放、暂停、上一首、下一首或跳转进度命令。支持 QQ 音乐、酷狗音乐、网易云音乐的基础媒体会话控制；调用后需等待手机后台服务领取并回传执行结果。',
+    title: 'Control playback',
+    description: 'Send play, pause, seek, next, or previous to the phone. code/roomSecret are optional only for MCP_OWNER_TOKEN-protected active room access.',
     inputSchema: {
-      code: z.string().min(6),
-      roomSecret: z.string().min(10),
+      code: optionalRoomCode,
+      roomSecret: optionalRoomSecret,
       command: z.enum(['play', 'pause', 'seek', 'next', 'previous']),
       positionMs: z.number().int().nonnegative().optional()
     }
   }, async ({ code, roomSecret, command, positionMs }) => {
     if (command === 'seek' && positionMs === undefined) {
-      return textResult({ ok: false, error: 'seek 命令必须提供 positionMs' });
+      return textResult({ ok: false, error: 'seek requires positionMs' });
     }
     try {
-      const room = await store.setCommand(code, roomSecret, { type: command, positionMs });
-      return textResult({ ok: true, command: room.pendingCommand, result: room.lastCommandResult });
-    } catch {
-      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+      const target = resolveRoom(store, access, { code, roomSecret });
+      const room = await store.setCommand(target.code, target.secret, { type: command, positionMs });
+      return textResult({ ok: true, command: sanitizeCommand(room.pendingCommand), result: room.lastCommandResult });
+    } catch (error) {
+      return textResult({ ok: false, error: roomError(error) });
     }
   });
 
-
   server.registerTool('search_and_play', {
-    title: '搜索并播放歌曲',
-    description: '让手机自动搜索指定歌曲并开始播放。优先使用系统媒体搜索；QQ 音乐不响应时，可由已授权的无障碍服务自动打开 QQ 音乐、输入关键词并点击最匹配结果。',
+    title: 'Search and play',
+    description: 'Ask the phone to search and play a song. code/roomSecret are optional only for MCP_OWNER_TOKEN-protected active room access.',
     inputSchema: {
-      code: z.string().min(6),
-      roomSecret: z.string().min(10),
+      code: optionalRoomCode,
+      roomSecret: optionalRoomSecret,
       title: z.string().min(1).max(160),
       artist: z.string().max(160).optional()
     }
@@ -177,42 +230,44 @@ export function createMcpServer(store: RoomStore): McpServer {
       const cleanTitle = title.trim();
       const cleanArtist = artist?.trim() ?? '';
       const query = [cleanTitle, cleanArtist].filter(Boolean).join(' ');
-      const room = await store.setCommand(code, roomSecret, {
+      const target = resolveRoom(store, access, { code, roomSecret });
+      const room = await store.setCommand(target.code, target.secret, {
         type: 'search_play',
         query,
         title: cleanTitle,
         artist: cleanArtist || undefined
       });
-      return textResult({ ok: true, command: room.pendingCommand, result: room.lastCommandResult });
-    } catch {
-      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+      return textResult({ ok: true, command: sanitizeCommand(room.pendingCommand), result: room.lastCommandResult });
+    } catch (error) {
+      return textResult({ ok: false, error: roomError(error) });
     }
   });
 
   server.registerTool('add_listening_note', {
-    title: '添加听歌笔记',
-    description: '实际写入同频房间的听歌笔记，而不是只在聊天中口头记住。当用户表达“帮我记一下”“记录这一刻”“收藏这句”“把现在记下来”“留一句笔记”等记录当前听歌的意图时，应优先调用本工具写入房间笔记；工具调用成功后，才可以回复“已记录”。保存听歌记录前，可以先调用 get_song_context 获取当前歌曲、当前歌词和 positionMs，用于记录准确的听歌节点。如果用户没有明确给出笔记文本，可以使用用户刚才的话、当前歌词 lyric，或简短整理后的文字作为 text。positionMs 可以使用当前播放进度，也可以省略，让服务器采用当前进度。必须区分聊天中的口头记住和写入同频房间笔记：用户要求记录当前听歌时，应实际调用 add_listening_note。',
+    title: 'Add listening note',
+    description: 'Write a listening note into the room. code/roomSecret are optional only for MCP_OWNER_TOKEN-protected active room access.',
     inputSchema: {
-      code: z.string().min(6),
-      roomSecret: z.string().min(10),
+      code: optionalRoomCode,
+      roomSecret: optionalRoomSecret,
       text: z.string().min(1).max(500),
       positionMs: z.number().int().nonnegative().optional()
     }
   }, async ({ code, roomSecret, text, positionMs }) => {
     try {
-      const room = await store.addNote(code, roomSecret, text, positionMs);
+      const target = resolveRoom(store, access, { code, roomSecret });
+      const room = await store.addNote(target.code, target.secret, text, positionMs);
       return textResult({ ok: true, note: room.notes.at(-1) });
-    } catch {
-      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+    } catch (error) {
+      return textResult({ ok: false, error: roomError(error) });
     }
   });
 
   server.registerTool('get_song_memory', {
-    title: '查询歌曲听歌记忆',
-    description: '查询当前同频房间里某首歌曲过去留下的听歌笔记。当用户询问“我以前听这首歌的时候说过什么”“这首歌有什么回忆”“我有没有记录过这首歌”等历史记忆问题时，可以调用本工具。当前依据 notes 中保存的歌曲标题 trackTitle 匹配历史笔记；artist 用于表达目标歌曲但暂不参与过滤，因为当前 notes 结构不保存歌手。未来如果 notes 保存 artist，可进一步提高匹配精度。',
+    title: 'Read song memory',
+    description: 'Read notes previously saved for a song title. code/roomSecret are optional only for MCP_OWNER_TOKEN-protected active room access.',
     inputSchema: {
-      code: z.string().min(6),
-      roomSecret: z.string().min(10),
+      code: optionalRoomCode,
+      roomSecret: optionalRoomSecret,
       title: z.string().min(1).max(200),
       artist: z.string().min(1).max(200)
     }
@@ -220,7 +275,7 @@ export function createMcpServer(store: RoomStore): McpServer {
     try {
       const cleanTitle = title.trim();
       const cleanArtist = artist.trim();
-      const room = store.authenticate(code, roomSecret);
+      const room = resolveRoom(store, access, { code, roomSecret });
       const memories = songMemoriesOf(room, cleanTitle);
       return textResult({
         ok: true,
@@ -230,25 +285,26 @@ export function createMcpServer(store: RoomStore): McpServer {
         },
         memories
       });
-    } catch {
-      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+    } catch (error) {
+      return textResult({ ok: false, error: roomError(error) });
     }
   });
 
   server.registerTool('get_song_context', {
-    title: '读取当前歌曲上下文与记忆',
-    description: 'AI 聊歌时的主要入口。获取当前播放歌曲、当前歌词、播放状态，以及这首歌过去保存的听歌记忆，供 AI 在聊天时自然引用历史回忆。用户询问正在听的歌、歌词含义、想聊当前歌曲、问这首歌以前有没有记录，或想回忆之前听这首歌的时刻时，应优先调用本工具。调用本工具后，不需要再分别调用 get_current_context 和 get_song_memory；它会读取当前播放歌曲，并按当前歌曲标题合并最多 5 条最近的历史听歌笔记。',
+    title: 'Read current song context and memory',
+    description: 'Primary music-chat context tool. Returns current song, playback, lyrics, listeningDurationMs, and recent memories. code/roomSecret are optional only for MCP_OWNER_TOKEN-protected active room access.',
     inputSchema: {
-      code: z.string().min(6),
-      roomSecret: z.string().min(10)
+      code: optionalRoomCode,
+      roomSecret: optionalRoomSecret
     }
   }, async ({ code, roomSecret }) => {
     try {
-      const room = toPublicRoom(store.authenticate(code, roomSecret));
+      const room = toMcpRoom(resolveRoom(store, access, { code, roomSecret }));
       const context = currentContextOf(room);
-      if (!context) {
+      if (!context.song) {
         return textResult({
           ok: true,
+          listeningDurationMs: room.listeningDurationMs,
           song: null,
           playback: null,
           lyrics: null,
@@ -260,8 +316,8 @@ export function createMcpServer(store: RoomStore): McpServer {
         ...context,
         memories: songMemoriesOf(room, context.song.title, { limit: 5, newestFirst: true })
       });
-    } catch {
-      return textResult({ ok: false, error: '房间不存在或密钥错误' });
+    } catch (error) {
+      return textResult({ ok: false, error: roomError(error) });
     }
   });
 
@@ -269,7 +325,12 @@ export function createMcpServer(store: RoomStore): McpServer {
 }
 
 export async function handleMcpRequest(store: RoomStore, req: Request, res: Response): Promise<void> {
-  const server = createMcpServer(store);
+  const ownerToken = process.env.MCP_OWNER_TOKEN ?? '';
+  const auth = req.header('authorization') ?? '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const queryToken = typeof req.query.access_token === 'string' ? req.query.access_token : '';
+  const canUseActiveRoom = Boolean(ownerToken) && (bearer === ownerToken || queryToken === ownerToken);
+  const server = createMcpServer(store, { canUseActiveRoom });
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true

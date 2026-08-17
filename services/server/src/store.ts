@@ -4,10 +4,14 @@ import { customAlphabet, nanoid } from 'nanoid';
 import type { CommandResult, CommandStatus, ListeningNote, PlaybackCommand, PlaybackSnapshot, Room } from './types.js';
 
 const roomCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
+const MAX_LISTENING_INCREMENT_MS = 10_000;
+const ACTIVE_ROOM_WINDOW_MS = 15_000;
 
 export class RoomStore {
   private rooms = new Map<string, Room>();
   private writeQueue: Promise<void> = Promise.resolve();
+  private activeRoomCode = '';
+  private activeRoomUpdatedAt = 0;
 
   constructor(private readonly filePath: string) {}
 
@@ -15,7 +19,10 @@ export class RoomStore {
     try {
       const raw = await readFile(this.filePath, 'utf8');
       const parsed = JSON.parse(raw) as Room[];
-      this.rooms = new Map(parsed.map(room => [room.code, room]));
+      this.rooms = new Map(parsed.map(room => [room.code, {
+        ...room,
+        listeningDurationMs: Math.max(0, Number(room.listeningDurationMs ?? 0))
+      }]));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -41,6 +48,7 @@ export class RoomStore {
       createdAt: now,
       updatedAt: now,
       revision: 0,
+      listeningDurationMs: 0,
       playback: null,
       pendingCommand: null,
       lastCommandResult: null,
@@ -57,11 +65,30 @@ export class RoomStore {
     return room;
   }
 
-  async publishPlayback(code: string, secret: string, snapshot: PlaybackSnapshot): Promise<Room> {
+  touchActiveRoom(code: string, secret: string): Room {
     const room = this.authenticate(code, secret);
-    room.playback = snapshot;
+    this.activeRoomCode = room.code;
+    this.activeRoomUpdatedAt = Date.now();
+    return room;
+  }
+
+  activeRoom(): Room | null {
+    if (!this.activeRoomCode || Date.now() - this.activeRoomUpdatedAt > ACTIVE_ROOM_WINDOW_MS) return null;
+    return this.rooms.get(this.activeRoomCode) ?? null;
+  }
+
+  async publishPlayback(code: string, secret: string, snapshot: PlaybackSnapshot): Promise<Room> {
+    const room = this.touchActiveRoom(code, secret);
+    const now = Date.now();
+    const previous = room.playback;
+    if (previous?.playing && Number.isFinite(previous.publishedAt)) {
+      const elapsed = Math.max(0, now - Number(previous.publishedAt));
+      room.listeningDurationMs = Math.max(0, room.listeningDurationMs ?? 0)
+        + Math.min(MAX_LISTENING_INCREMENT_MS, elapsed);
+    }
+    room.playback = { ...snapshot, publishedAt: now };
     room.revision += 1;
-    room.updatedAt = Date.now();
+    room.updatedAt = now;
     await this.persist();
     return room;
   }

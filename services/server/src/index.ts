@@ -89,7 +89,7 @@ app.post('/api/rooms', async (_req, res) => {
 
 app.get('/api/rooms/:code', (req, res) => {
   try {
-    res.json(toPublicRoom(store.authenticate(req.params.code, secretOf(req))));
+    res.json(toPublicRoom(store.touchActiveRoom(req.params.code, secretOf(req))));
   } catch {
     res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
   }
