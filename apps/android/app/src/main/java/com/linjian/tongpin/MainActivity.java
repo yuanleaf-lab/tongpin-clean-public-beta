@@ -95,6 +95,7 @@ public final class MainActivity extends Activity {
     private TextView lyricText;
     private TextView nextLyricText;
     private TextView timeText;
+    private TextView listeningDurationText;
     private TextView roomCodeText;
     private TextView roomSecretText;
     private TextView diagnosticsText;
@@ -478,6 +479,11 @@ public final class MainActivity extends Activity {
         timeText.setGravity(Gravity.END);
         timeText.setPadding(0, dp(6), 0, 0);
         card.addView(timeText, matchWrap());
+
+        listeningDurationText = text("一起听了 0 分钟", 12f, palette.secondary, false);
+        listeningDurationText.setGravity(Gravity.END);
+        listeningDurationText.setPadding(0, dp(2), 0, 0);
+        card.addView(listeningDurationText, matchWrap());
 
         LinearLayout lyricBox = new LinearLayout(this);
         lyricBox.setOrientation(LinearLayout.VERTICAL);
@@ -984,6 +990,7 @@ public final class MainActivity extends Activity {
         PlaybackSnapshot playback = Prefs.playback(this);
         long lastSync = Prefs.lastSync(this);
         long lastPublish = Prefs.lastPlaybackPublish(this);
+        long listeningDurationMs = Prefs.listeningDurationMs(this);
         boolean permission = isNotificationAccessEnabled();
 
         boolean connected = permission && !room.code.isEmpty() && lastSync > 0L
@@ -1029,6 +1036,7 @@ public final class MainActivity extends Activity {
         songAlbum.setText(meta);
         songAlbum.setVisibility(meta.isEmpty() ? View.GONE : View.VISIBLE);
         timeText.setText(formatTime(position) + " / " + formatTime(playback.durationMs));
+        listeningDurationText.setText(formatListeningDuration(listeningDurationMs));
         int progress = playback.durationMs > 0L
                 ? (int) Math.min(1000L, Math.round(position * 1000.0 / playback.durationMs))
                 : 0;
@@ -1996,6 +2004,16 @@ public final class MainActivity extends Activity {
     private static String formatTime(long ms) {
         long seconds = Math.max(0L, ms) / 1000L;
         return String.format(Locale.getDefault(), "%d:%02d", seconds / 60L, seconds % 60L);
+    }
+
+    private static String formatListeningDuration(long ms) {
+        long minutes = Math.max(0L, ms) / 60_000L;
+        if (minutes < 60L) return "一起听了 " + minutes + " 分钟";
+        long hours = minutes / 60L;
+        long rest = minutes % 60L;
+        return rest == 0L
+                ? "一起听了 " + hours + " 小时"
+                : "一起听了 " + hours + " 小时 " + rest + " 分钟";
     }
 
     private static String formatClock(long ms) {

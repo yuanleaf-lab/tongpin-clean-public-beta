@@ -175,32 +175,3 @@ test('listening duration continues across track changes and caps one increment a
     await rm(dir, { recursive: true, force: true });
   }
 });
-
-test('active room follows the latest authenticated phone sync and expires', async () => {
-  const originalNow = Date.now;
-  const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
-  try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
-    setNow(1_000);
-    const first = await store.create();
-    const second = await store.create();
-
-    assert.equal(store.activeRoom(), null);
-
-    store.touchActiveRoom(first.code, first.secret);
-    assert.equal(store.activeRoom()?.code, first.code);
-
-    setNow(2_000);
-    await store.publishPlayback(second.code, second.secret, playback({ title: 'Second', playing: true }));
-    assert.equal(store.activeRoom()?.code, second.code);
-
-    setNow(16_999);
-    assert.equal(store.activeRoom()?.code, second.code);
-
-    setNow(17_001);
-    assert.equal(store.activeRoom(), null);
-  } finally {
-    Date.now = originalNow;
-    await rm(dir, { recursive: true, force: true });
-  }
-});

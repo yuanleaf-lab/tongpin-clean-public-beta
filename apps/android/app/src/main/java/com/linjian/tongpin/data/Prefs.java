@@ -65,6 +65,7 @@ public final class Prefs {
                 .remove("last_command_id")
                 .remove("last_command_status")
                 .remove("room_notes")
+                .remove("listening_duration_ms")
                 .apply();
     }
 
@@ -226,6 +227,14 @@ public final class Prefs {
 
     public static void saveLastPlaybackPublish(Context context, long value) {
         prefs(context).edit().putLong("last_playback_publish", value).apply();
+    }
+
+    public static long listeningDurationMs(Context context) {
+        return prefs(context).getLong("listening_duration_ms", 0L);
+    }
+
+    public static void saveListeningDurationMs(Context context, long value) {
+        prefs(context).edit().putLong("listening_duration_ms", Math.max(0L, value)).apply();
     }
 
     public static String lastCommandId(Context context) {

@@ -100,6 +100,10 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                     } else {
                         JSONObject json = RoomApi.getRoomSync(TongpinNotificationListener.this);
                         Prefs.saveLastSync(TongpinNotificationListener.this, System.currentTimeMillis());
+                        Prefs.saveListeningDurationMs(
+                                TongpinNotificationListener.this,
+                                Math.max(0L, json.optLong("listeningDurationMs", 0L))
+                        );
                         if (json.optJSONArray("notes") != null) {
                             Prefs.saveRoomNotes(TongpinNotificationListener.this, json.optJSONArray("notes").toString());
                         }

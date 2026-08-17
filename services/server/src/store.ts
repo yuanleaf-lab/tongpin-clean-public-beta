@@ -5,13 +5,10 @@ import type { CommandResult, CommandStatus, ListeningNote, PlaybackCommand, Play
 
 const roomCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const MAX_LISTENING_INCREMENT_MS = 10_000;
-const ACTIVE_ROOM_WINDOW_MS = 15_000;
 
 export class RoomStore {
   private rooms = new Map<string, Room>();
   private writeQueue: Promise<void> = Promise.resolve();
-  private activeRoomCode = '';
-  private activeRoomUpdatedAt = 0;
 
   constructor(private readonly filePath: string) {}
 
@@ -65,20 +62,8 @@ export class RoomStore {
     return room;
   }
 
-  touchActiveRoom(code: string, secret: string): Room {
-    const room = this.authenticate(code, secret);
-    this.activeRoomCode = room.code;
-    this.activeRoomUpdatedAt = Date.now();
-    return room;
-  }
-
-  activeRoom(): Room | null {
-    if (!this.activeRoomCode || Date.now() - this.activeRoomUpdatedAt > ACTIVE_ROOM_WINDOW_MS) return null;
-    return this.rooms.get(this.activeRoomCode) ?? null;
-  }
-
   async publishPlayback(code: string, secret: string, snapshot: PlaybackSnapshot): Promise<Room> {
-    const room = this.touchActiveRoom(code, secret);
+    const room = this.authenticate(code, secret);
     const now = Date.now();
     const previous = room.playback;
     if (previous?.playing && Number.isFinite(previous.publishedAt)) {
