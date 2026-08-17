@@ -42,12 +42,21 @@ public final class TongpinNotificationListener extends NotificationListenerServi
     private static final long POLL_INTERVAL_MS = 700L;
     private static final long POSITION_PUBLISH_STEP_MS = 1_200L;
     private static final long HEARTBEAT_PUBLISH_MS = 4_000L;
+    private static final long LIVE_LYRICS_SCAN_RETRY_MS = 15_000L;
+    private static final long LIVE_LYRICS_SCAN_WINDOW_MS = 7_000L;
+    private static final String NO_SYNCED_LYRICS = "暂未找到同步歌词";
+    private static final String LRCLIB_NO_RESULT = "LRCLIB无结果";
+    private static final String QQ_LYRICS_WAITING = "QQ音乐歌词等待扫描";
+    private static final String QQ_LYRICS_SCAN_FAILED = "QQ音乐扫描失败";
+    private static final String NO_SYNCED_LYRICS_AVAILABLE = "当前没有同步歌词";
     private static final long[] VERIFY_DELAYS_MS = {320L, 520L, 780L, 1_150L, 1_700L, 2_400L, 3_200L};
     private static final long[] SEARCH_VERIFY_DELAYS_MS = {500L, 780L, 1_100L, 1_500L, 2_100L, 2_900L, 3_900L, 5_200L};
     private static volatile TongpinNotificationListener instance;
 
     private MediaSessionManager sessionManager;
     private MediaController controller;
+    private long lastLiveLyricsScanAt;
+    private String lastLiveLyricsScanKey = "";
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService pollNetwork = Executors.newSingleThreadExecutor();
     private final ExecutorService publishNetwork = Executors.newSingleThreadExecutor();
@@ -170,6 +179,24 @@ public final class TongpinNotificationListener extends NotificationListenerServi
     public void onListenerConnected() {
         super.onListenerConnected();
         instance = this;
+        mainHandler.removeCallbacksAndMessages(null);
+        polling.set(false);
+        publishing.set(false);
+        latestToPublish.set(null);
+        commandInFlight.set("");
+        if (controller != null) {
+            try {
+                controller.unregisterCallback(mediaCallback);
+            } catch (Throwable ignored) {
+            }
+            controller = null;
+        }
+        if (sessionManager != null) {
+            try {
+                sessionManager.removeOnActiveSessionsChangedListener(sessionListener);
+            } catch (Throwable ignored) {
+            }
+        }
         sessionManager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
         ComponentName component = new ComponentName(this, getClass());
         try {
@@ -179,7 +206,6 @@ public final class TongpinNotificationListener extends NotificationListenerServi
             Prefs.saveStatus(this, "请重新授权通知使用权");
         }
         Prefs.saveStatus(this, "通知服务已连接 · 实时同步中");
-        mainHandler.removeCallbacks(pollRunnable);
         mainHandler.post(pollRunnable);
     }
 
@@ -278,6 +304,7 @@ public final class TongpinNotificationListener extends NotificationListenerServi
     private void captureAndPublish(boolean force) {
         PlaybackSnapshot snapshot = buildSnapshot();
         Prefs.savePlayback(this, snapshot);
+        requestLiveLyricsScanIfNeeded(snapshot);
 
         RoomCredentials room = Prefs.room(this);
         if (room.code.isEmpty() || room.secret.isEmpty()) return;
@@ -347,6 +374,11 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                 false
         );
         String trackKey = identity.trackKey();
+        LiveLyricsSnapshot liveLyric = Prefs.liveLyrics(this);
+        if (!liveLyric.trackKey.isEmpty() && !liveLyric.matches(trackKey)) {
+            Prefs.clearLiveLyrics(this);
+            liveLyric = Prefs.liveLyrics(this);
+        }
         lyricsRepository.ensure(
                 trackKey,
                 safeTitle,
@@ -357,7 +389,6 @@ public final class TongpinNotificationListener extends NotificationListenerServi
         );
         ManualLyricsStore.Snapshot manualLyric = ManualLyricsStore.at(this, trackKey, position);
         LyricsRepository.Snapshot libraryLyric = lyricsRepository.at(trackKey, position);
-        LiveLyricsSnapshot liveLyric = Prefs.liveLyrics(this);
         boolean useLiveLyric = Prefs.qqLyricsEnabled(this)
                 && liveLyric.matches(trackKey)
                 && liveLyric.isFresh(System.currentTimeMillis(), 12_000L)
@@ -385,7 +416,7 @@ public final class TongpinNotificationListener extends NotificationListenerServi
         } else {
             lyricCurrent = libraryLyric.current;
             lyricNext = libraryLyric.next;
-            lyricSource = libraryLyric.source;
+            lyricSource = missingLyricsSource(libraryLyric.source, trackKey);
             lyricSynced = libraryLyric.synced;
         }
 
@@ -404,6 +435,41 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                 lyricSource,
                 lyricSynced
         );
+    }
+
+    private void requestLiveLyricsScanIfNeeded(PlaybackSnapshot snapshot) {
+        if (snapshot == null || snapshot.lyricsSynced) return;
+        if (!Prefs.qqLyricsEnabled(this)) return;
+        if (!isNoSyncedLyricsStatus(snapshot.lyricsSource)) return;
+
+        String key = snapshot.trackKey();
+        long now = System.currentTimeMillis();
+        if (key.equals(lastLiveLyricsScanKey) && now - lastLiveLyricsScanAt < LIVE_LYRICS_SCAN_RETRY_MS) {
+            return;
+        }
+        if (QQMusicLyricsAccessibilityService.requestCurrentLyricsScan(key)) {
+            lastLiveLyricsScanKey = key;
+            lastLiveLyricsScanAt = now;
+        }
+    }
+
+    private String missingLyricsSource(String librarySource, String trackKey) {
+        if (!NO_SYNCED_LYRICS.equals(librarySource)) return librarySource;
+        if (!Prefs.qqLyricsEnabled(this)) return LRCLIB_NO_RESULT;
+        if (!QQMusicLyricsAccessibilityService.isConnected()) return NO_SYNCED_LYRICS_AVAILABLE;
+        long now = System.currentTimeMillis();
+        if (!trackKey.equals(lastLiveLyricsScanKey)) return QQ_LYRICS_WAITING;
+        return now - lastLiveLyricsScanAt <= LIVE_LYRICS_SCAN_WINDOW_MS
+                ? QQ_LYRICS_WAITING
+                : QQ_LYRICS_SCAN_FAILED;
+    }
+
+    private static boolean isNoSyncedLyricsStatus(String value) {
+        return NO_SYNCED_LYRICS.equals(value)
+                || LRCLIB_NO_RESULT.equals(value)
+                || QQ_LYRICS_WAITING.equals(value)
+                || QQ_LYRICS_SCAN_FAILED.equals(value)
+                || NO_SYNCED_LYRICS_AVAILABLE.equals(value);
     }
 
     private boolean shouldPublish(String roomCode, PlaybackSnapshot next, boolean force) {

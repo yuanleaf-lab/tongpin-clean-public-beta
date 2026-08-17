@@ -53,6 +53,8 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
     private static final long OCR_INTERVAL_MS = 1_500L;
     private static final long AUTOMATION_INTERVAL_MS = 360L;
     private static final long AUTOMATION_TIMEOUT_MS = 22_000L;
+    private static final long[] LYRICS_RETRY_DELAYS_MS = {0L, 650L, 1_300L, 2_200L, 3_400L, 5_000L};
+    private static final int MAX_FAILED_SCANS_PER_TRACK = 18;
     private static final Pattern HAS_LETTER = Pattern.compile(".*\\p{L}.*");
     private static final Pattern CONTROL_TEXT = Pattern.compile(
             "(?i)^(播放|暂停|上一首|下一首|返回|更多|评论|下载|收藏|分享|音质|标准|无损|歌词|一起听|倍速|定时关闭|相关推荐|歌曲|歌手|专辑|QQ音乐|酷狗音乐|网易云音乐|VIP|MV|音效|桌面歌词|锁屏歌词|私人FM|每日推荐|我喜欢|识曲|广告)$"
@@ -68,6 +70,11 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
     private long lastOcrAt;
     private SearchRequest searchRequest;
     private String lastAutomationActiveWindow = "";
+    private String lyricsRetryKey = "";
+    private int lyricsRetryGeneration;
+    private String scanBudgetKey = "";
+    private int failedScansForKey;
+    private boolean scanCoolingForKey;
 
     private final Runnable periodicScan = new Runnable() {
         @Override
@@ -91,6 +98,23 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
 
     public static boolean isConnected() {
         return instance != null;
+    }
+
+    public static boolean requestCurrentLyricsScan() {
+        QQMusicLyricsAccessibilityService service = instance;
+        if (service == null) return false;
+        if (!Prefs.qqLyricsEnabled(service)) return false;
+        service.handler.post(() -> service.scanCurrentWindow("manual"));
+        return true;
+    }
+
+    public static boolean requestCurrentLyricsScan(String trackKey) {
+        QQMusicLyricsAccessibilityService service = instance;
+        if (service == null) return false;
+        if (!Prefs.qqLyricsEnabled(service)) return false;
+        if (!service.canScheduleLyricsScan(trackKey)) return false;
+        service.handler.post(() -> service.scheduleCurrentLyricsScan(trackKey));
+        return true;
     }
 
     public static boolean requestSearchAndPlay(
@@ -150,7 +174,8 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
 
         if (!supportedPlayerActive || !Prefs.qqLyricsEnabled(this)) return;
         AccessibilityNodeInfo source = event.getSource();
-        if (source != null) scanNode(source, Prefs.playback(this), true);
+        PlaybackSnapshot playback = Prefs.playback(this);
+        if (source != null && canScanPlayback(playback, false, "event")) scanNode(source, playback, true);
         handler.removeCallbacks(periodicScan);
         handler.postDelayed(periodicScan, 100L);
     }
@@ -217,7 +242,8 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
     }
 
     private void logActiveWindow(String label) {
-        Log.d(TAG, label + "=" + rootState(getRootInActiveWindow()));
+        String state = rootState(getRootInActiveWindow());
+        Log.d(TAG, label + "=" + state);
     }
 
     private static String rootState(AccessibilityNodeInfo root) {
@@ -475,8 +501,73 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         return dispatchGesture(gesture, null, null);
     }
 
+    private boolean canScheduleLyricsScan(String trackKey) {
+        String key = trackKey == null ? "" : trackKey;
+        resetScanBudgetIfTrackChanged(key);
+        if (failedScansForKey >= MAX_FAILED_SCANS_PER_TRACK) scanCoolingForKey = true;
+        if (scanCoolingForKey) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean canScanPlayback(PlaybackSnapshot playback, boolean countFailure, String reason) {
+        String key = playback == null ? "" : playback.trackKey();
+        resetScanBudgetIfTrackChanged(key);
+        if (failedScansForKey >= MAX_FAILED_SCANS_PER_TRACK) scanCoolingForKey = true;
+        if (scanCoolingForKey) {
+            return false;
+        }
+        if (countFailure) {
+            if (failedScansForKey >= MAX_FAILED_SCANS_PER_TRACK) {
+                scanCoolingForKey = true;
+                return false;
+            }
+            failedScansForKey += 1;
+        }
+        return true;
+    }
+
+    private void resetScanBudgetIfTrackChanged(String trackKey) {
+        String key = trackKey == null ? "" : trackKey;
+        if (key.equals(scanBudgetKey)) return;
+        scanBudgetKey = key;
+        failedScansForKey = 0;
+        scanCoolingForKey = false;
+    }
+
+    private void resetScanBudget(String trackKey) {
+        resetScanBudgetIfTrackChanged(trackKey);
+        failedScansForKey = 0;
+        scanCoolingForKey = false;
+    }
+
     private void scanCurrentWindow() {
+        scanCurrentWindow("periodic");
+    }
+
+    private void scheduleCurrentLyricsScan(String trackKey) {
         if (!Prefs.qqLyricsEnabled(this)) return;
+        String key = trackKey == null ? "" : trackKey;
+        if (!canScheduleLyricsScan(key)) return;
+        lyricsRetryKey = key;
+        int generation = ++lyricsRetryGeneration;
+        for (long delay : LYRICS_RETRY_DELAYS_MS) {
+            handler.postDelayed(() -> {
+                if (generation != lyricsRetryGeneration) return;
+                PlaybackSnapshot playback = Prefs.playback(this);
+                if (!key.isEmpty() && !key.equals(playback.trackKey())) {
+                    return;
+                }
+                scanCurrentWindow("retry");
+            }, delay);
+        }
+    }
+
+    private void scanCurrentWindow(String reason) {
+        if (!Prefs.qqLyricsEnabled(this)) return;
+        PlaybackSnapshot playback = Prefs.playback(this);
+        if (!canScanPlayback(playback, "retry".equals(reason), reason)) return;
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null || root.getPackageName() == null) return;
         String packageName = root.getPackageName().toString();
@@ -484,7 +575,6 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         supportedPlayerActive = true;
         activePackage = packageName;
 
-        PlaybackSnapshot playback = Prefs.playback(this);
         if (scanNode(root, playback, false)) return;
         if (Prefs.ocrLyricsEnabled(this)) requestOcr(playback);
     }
@@ -495,8 +585,9 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         collectCandidates(root, playback, screenHeight, candidates, new HashSet<>(), 0, relaxedBounds);
         LyricsPair pair = choosePair(candidates, screenHeight);
         if (!pair.hasText()) return false;
-        publish(playback, pair.current, pair.next, liveSourceLabel(playback, "界面"));
-        return true;
+        boolean published = publish(playback, pair.current, pair.next, liveSourceLabel(playback, "界面"));
+        if (published) resetScanBudget(playback.trackKey());
+        return published;
     }
 
     private void collectCandidates(
@@ -622,7 +713,9 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
                         }
                     }
                     LyricsPair pair = choosePair(values, fullHeight);
-                    if (pair.hasText()) publish(playback, pair.current, pair.next, liveSourceLabel(playback, "屏幕识别"));
+                    boolean published = pair.hasText()
+                            && publish(playback, pair.current, pair.next, liveSourceLabel(playback, "屏幕识别"));
+                    if (published) resetScanBudget(playback.trackKey());
                 })
                 .addOnCompleteListener(task -> {
                     crop.recycle();
@@ -639,10 +732,10 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         return player + suffix;
     }
 
-    private void publish(PlaybackSnapshot playback, String current, String next, String source) {
+    private boolean publish(PlaybackSnapshot playback, String current, String next, String source) {
         String cleanCurrent = clean(current);
         String cleanNext = clean(next);
-        if (cleanCurrent.isEmpty() && cleanNext.isEmpty()) return;
+        if (cleanCurrent.isEmpty() && cleanNext.isEmpty()) return false;
         long now = System.currentTimeMillis();
         LiveLyricsSnapshot existing = Prefs.liveLyrics(this);
         if (existing.matches(playback.trackKey())
@@ -650,7 +743,7 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
                 && existing.next.equals(cleanNext)
                 && existing.source.equals(source)
                 && now - existing.observedAt < 2_000L) {
-            return;
+            return false;
         }
         Prefs.saveLiveLyrics(
                 this,
@@ -661,6 +754,7 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
                 now
         );
         TongpinNotificationListener.requestImmediateRefresh();
+        return true;
     }
 
     private static boolean looksLikeLyric(String text, PlaybackSnapshot playback) {

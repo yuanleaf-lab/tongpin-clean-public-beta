@@ -8,6 +8,7 @@ import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.Handler;
@@ -33,8 +34,26 @@ public final class TongpinForegroundService extends Service {
     private static final String CHANNEL_ID = "tongpin_background_sync";
     private static final int NOTIFICATION_ID = 524;
     private static final long KEEP_ALIVE_INTERVAL_MS = 2_500L;
+    private static final long REBIND_CONFIRM_DELAY_MS = 3_000L;
+    private static final long SYNC_HEALTH_WINDOW_MS = 12_000L;
+    private static final long COMPONENT_RESET_INTERVAL_MS = 20_000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private long lastComponentResetAt;
+    private final Runnable listenerRecoveryRunnable = new Runnable() {
+        @Override
+        public void run() {
+            RoomCredentials room = Prefs.room(TongpinForegroundService.this);
+            if (!Prefs.backgroundSyncEnabled(TongpinForegroundService.this) || room.code.isEmpty()) {
+                return;
+            }
+            if (!isSyncHealthy()) {
+                requestNotificationListenerRecovery("后台待命 · 正在确认媒体服务恢复");
+                handler.postDelayed(this, REBIND_CONFIRM_DELAY_MS);
+            }
+            updateNotification();
+        }
+    };
     private final Runnable keepAliveRunnable = new Runnable() {
         @Override
         public void run() {
@@ -46,12 +65,11 @@ public final class TongpinForegroundService extends Service {
             RoomCredentials room = Prefs.room(TongpinForegroundService.this);
             if (room.code.isEmpty()) {
                 Prefs.saveStatus(TongpinForegroundService.this, "后台待命 · 等待创建房间");
-            } else if (!TongpinNotificationListener.isConnected()) {
-                Prefs.saveStatus(TongpinForegroundService.this, "后台待命 · 正在重新连接媒体服务");
-                NotificationListenerService.requestRebind(new ComponentName(
-                        TongpinForegroundService.this,
-                        TongpinNotificationListener.class
-                ));
+                handler.removeCallbacks(listenerRecoveryRunnable);
+            } else if (!isSyncHealthy()) {
+                requestNotificationListenerRecovery("后台待命 · 正在重新连接媒体服务");
+                handler.removeCallbacks(listenerRecoveryRunnable);
+                handler.postDelayed(listenerRecoveryRunnable, REBIND_CONFIRM_DELAY_MS);
             }
 
             updateNotification();
@@ -218,5 +236,47 @@ public final class TongpinForegroundService extends Service {
     private void updateNotification() {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification());
+    }
+
+    private boolean isSyncHealthy() {
+        if (!TongpinNotificationListener.isConnected()) return false;
+        long lastSync = Prefs.lastSync(this);
+        return lastSync > 0L && System.currentTimeMillis() - lastSync < SYNC_HEALTH_WINDOW_MS;
+    }
+
+    private void requestNotificationListenerRecovery(String status) {
+        Prefs.saveStatus(this, status);
+        ComponentName component = new ComponentName(this, TongpinNotificationListener.class);
+        if (!TongpinNotificationListener.isConnected() && isSyncStale()) {
+            resetNotificationListenerComponentIfNeeded(component);
+        }
+        NotificationListenerService.requestRebind(component);
+        TongpinNotificationListener.requestImmediateRefresh();
+    }
+
+    private boolean isSyncStale() {
+        long lastSync = Prefs.lastSync(this);
+        return lastSync <= 0L || System.currentTimeMillis() - lastSync >= SYNC_HEALTH_WINDOW_MS;
+    }
+
+    private void resetNotificationListenerComponentIfNeeded(ComponentName component) {
+        long now = System.currentTimeMillis();
+        if (now - lastComponentResetAt < COMPONENT_RESET_INTERVAL_MS) return;
+        lastComponentResetAt = now;
+        PackageManager packageManager = getPackageManager();
+        try {
+            packageManager.setComponentEnabledSetting(
+                    component,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP
+            );
+            packageManager.setComponentEnabledSetting(
+                    component,
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP
+            );
+        } catch (Throwable error) {
+            Log.w(TAG, "notification listener component reset failed", error);
+        }
     }
 }
