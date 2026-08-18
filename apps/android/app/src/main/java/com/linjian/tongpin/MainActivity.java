@@ -661,7 +661,7 @@ public final class MainActivity extends Activity {
             secretVisible = !secretVisible;
             refreshUi();
         }, false));
-        secondaryActions.addView(actionButton("清除房间", this::confirmClearRoom, false));
+        secondaryActions.addView(actionButton("断开当前房间", this::confirmClearRoom, false));
         card.addView(secondaryActions, matchWrap());
         return card;
     }
@@ -1158,14 +1158,21 @@ public final class MainActivity extends Activity {
         row.setLayoutParams(params);
 
         long position = Math.max(0L, note.optLong("positionMs", 0L));
+        String noteId = Prefs.stableNoteId(note);
         String trackTitle = note.optString("trackTitle", "未知歌曲").trim();
         String textValue = note.optString("text", "").trim();
         long createdAt = note.optLong("createdAt", 0L);
 
         String meta = formatTime(position) + " · " + (trackTitle.isEmpty() ? "未知歌曲" : "《" + trackTitle + "》");
         if (createdAt > 0L) meta += " · " + relativeTime(createdAt);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
         TextView metaView = text(meta, 12f, sameTrack ? palette.accent : palette.secondary, true);
-        row.addView(metaView, matchWrap());
+        header.addView(metaView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        Button deleteButton = actionButton("删除", () -> confirmDeleteNote(noteId, trackTitle, textValue), false);
+        header.addView(deleteButton, new LinearLayout.LayoutParams(dp(64), dp(34)));
+        row.addView(header, matchWrap());
 
         TextView body = text(textValue.isEmpty() ? "（空笔记）" : textValue, 14f, palette.text, false);
         body.setPadding(0, dp(6), 0, 0);
@@ -1187,6 +1194,39 @@ public final class MainActivity extends Activity {
             return true;
         });
         return row;
+    }
+
+    private void confirmDeleteNote(String noteId, String trackTitle, String textValue) {
+        String cleanTitle = trackTitle == null || trackTitle.trim().isEmpty() ? "未知歌曲" : trackTitle.trim();
+        String preview = notePreview(textValue);
+        new AlertDialog.Builder(this)
+                .setTitle("删除这条听歌笔记？")
+                .setMessage("歌曲：《" + cleanTitle + "》\n笔记：" + preview + "\n\n删除后会同步到服务端，不会影响其他笔记和累计时长。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (dialog, which) -> {
+                    Prefs.deleteRoomNote(this, noteId);
+                    refreshUi();
+                    RoomCredentials room = Prefs.room(this);
+                    if (room.code.isEmpty() || room.secret.isEmpty()) {
+                        toast("已删除，重新绑定房间后会同步");
+                        return;
+                    }
+                    RoomApi.deleteNote(this, noteId, new RoomApi.Callback<>() {
+                        @Override
+                        public void onSuccess(Boolean deleted) {
+                            runOnUiThread(() -> {
+                                refreshUi();
+                                toast(Boolean.TRUE.equals(deleted) ? "笔记已删除" : "删除状态已同步");
+                            });
+                        }
+
+                        @Override
+                        public void onError(Throwable error) {
+                            runOnUiThread(() -> toast("已本地删除，稍后同步：" + safeMessage(error)));
+                        }
+                    });
+                })
+                .show();
     }
 
     private void requestImmediateRefresh() {
@@ -1507,13 +1547,13 @@ public final class MainActivity extends Activity {
 
     private void confirmClearRoom() {
         new AlertDialog.Builder(this)
-                .setTitle("清除当前房间？")
-                .setMessage("只会清除手机本地保存的房间信息。")
+                .setTitle("断开当前房间？")
+                .setMessage("只会清除手机当前连接的房间信息，听歌笔记和累计时长会保留。")
                 .setNegativeButton("取消", null)
-                .setPositiveButton("清除", (dialog, which) -> {
+                .setPositiveButton("断开", (dialog, which) -> {
                     Prefs.clearRoom(this);
                     TongpinForegroundService.stop(this);
-                    Prefs.saveStatus(this, "房间已清除");
+                    Prefs.saveStatus(this, "当前房间已断开");
                     refreshUi();
                 })
                 .show();
@@ -1976,6 +2016,12 @@ public final class MainActivity extends Activity {
 
     private static String clean(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static String notePreview(String value) {
+        String clean = clean(value).replace('\n', ' ');
+        if (clean.isEmpty()) return "（空笔记）";
+        return clean.length() <= 60 ? clean : clean.substring(0, 60) + "…";
     }
 
     private static String playbackMeta(PlaybackSnapshot playback) {

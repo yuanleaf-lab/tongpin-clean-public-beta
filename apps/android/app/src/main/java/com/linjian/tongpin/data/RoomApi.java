@@ -134,8 +134,40 @@ public final class RoomApi {
                 .put("lyric", snapshot.lyric)
                 .put("nextLyric", snapshot.nextLyric)
                 .put("lyricsSource", snapshot.lyricsSource)
-                .put("lyricsSynced", snapshot.lyricsSynced);
+                .put("lyricsSynced", snapshot.lyricsSynced)
+                .put("listeningDurationMs", Prefs.listeningDurationMs(context))
+                .put("notes", Prefs.roomNotes(context))
+                .put("deletedNoteIds", Prefs.deletedNoteIds(context));
         request("POST", server + "/api/rooms/" + room.code + "/playback", room.secret, body);
+    }
+
+    public static void deleteNote(Context context, String noteId, Callback<Boolean> callback) {
+        EXECUTOR.execute(() -> {
+            try {
+                String cleanNoteId = noteId == null ? "" : noteId.trim();
+                if (cleanNoteId.isEmpty()) throw new IOException("笔记 ID 为空");
+                String server = Prefs.server(context);
+                RoomCredentials room = Prefs.room(context);
+                if (room.code.isEmpty() || room.secret.isEmpty()) throw new IOException("尚未创建房间");
+                JSONObject json = request(
+                        "DELETE",
+                        server + "/api/rooms/" + room.code + "/notes/" + cleanNoteId,
+                        room.secret,
+                        null
+                );
+                if (json.optJSONArray("deletedNoteIds") != null) {
+                    Prefs.mergeDeletedNoteIds(context, json.optJSONArray("deletedNoteIds"));
+                } else if (json.optJSONObject("room") != null && json.optJSONObject("room").optJSONArray("deletedNoteIds") != null) {
+                    Prefs.mergeDeletedNoteIds(context, json.optJSONObject("room").optJSONArray("deletedNoteIds"));
+                }
+                if (json.optJSONObject("room") != null && json.optJSONObject("room").optJSONArray("notes") != null) {
+                    Prefs.mergeRoomNotes(context, json.optJSONObject("room").optJSONArray("notes"));
+                }
+                callback.onSuccess(json.optBoolean("deleted", true));
+            } catch (Throwable error) {
+                callback.onError(error);
+            }
+        });
     }
 
     public static void acknowledgeCommandSync(Context context, String commandId, String status, String message) throws Exception {

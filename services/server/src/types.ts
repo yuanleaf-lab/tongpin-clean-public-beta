@@ -57,6 +57,7 @@ export interface Room {
   pendingCommand: PlaybackCommand | null;
   lastCommandResult: CommandResult | null;
   notes: ListeningNote[];
+  deletedNoteIds: string[];
 }
 
 export type PublicRoom = Omit<Room, 'secret'>;
@@ -100,5 +101,6 @@ export const toPublicRoom = (room: Room): PublicRoom => ({
   playback: room.playback ? projectPlaybackPosition(room.playback) : null,
   pendingCommand: room.pendingCommand,
   lastCommandResult: room.lastCommandResult,
-  notes: room.notes
+  notes: room.notes,
+  deletedNoteIds: room.deletedNoteIds ?? []
 });

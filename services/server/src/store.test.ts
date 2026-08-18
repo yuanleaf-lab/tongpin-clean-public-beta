@@ -175,3 +175,186 @@ test('listening duration continues across track changes and caps one increment a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('new room can inherit client listening history without deleting existing history', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
+  const file = join(dir, 'rooms.json');
+  try {
+    const store = new RoomStore(file);
+    const room = await store.create();
+    await store.publishPlayback(room.code, room.secret, playback({ title: 'New room song' }), {
+      listeningDurationMs: 42_000,
+      notes: [{
+        id: 'saved-note',
+        text: 'still here',
+        positionMs: 12_000,
+        trackTitle: 'Old song',
+        createdAt: 1_700_000_000_000
+      }]
+    });
+
+    assert.equal(room.listeningDurationMs, 42_000);
+    assert.equal(room.notes.length, 1);
+    assert.equal(room.notes[0].text, 'still here');
+
+    const reloaded = new RoomStore(file);
+    await reloaded.load();
+    const loaded = reloaded.authenticate(room.code, room.secret);
+    assert.equal(loaded.listeningDurationMs, 42_000);
+    assert.equal(loaded.notes[0].id, 'saved-note');
+
+    await reloaded.publishPlayback(room.code, room.secret, playback({ title: 'New room song' }), {
+      listeningDurationMs: 1_000,
+      notes: []
+    });
+    assert.equal(loaded.listeningDurationMs, 42_000);
+    assert.equal(loaded.notes.length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('deleted note tombstone prevents stale client cache from reviving it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
+  const file = join(dir, 'rooms.json');
+  try {
+    const store = new RoomStore(file);
+    const room = await store.create();
+    await store.publishPlayback(room.code, room.secret, playback({ playing: false }), {
+      listeningDurationMs: 90_000,
+      notes: [
+        {
+          id: 'note-delete',
+          text: 'delete me',
+          positionMs: 10_000,
+          trackTitle: 'Song',
+          createdAt: 1_700_000_000_000
+        },
+        {
+          id: 'note-keep',
+          text: 'keep me',
+          positionMs: 20_000,
+          trackTitle: 'Song',
+          createdAt: 1_700_000_001_000
+        }
+      ]
+    });
+    assert.equal(room.notes.length, 2);
+
+    const beforeDuration = room.listeningDurationMs;
+    const result = await store.deleteNote(room.code, room.secret, 'note-delete');
+    assert.equal(result.deleted, true);
+    assert.deepEqual(room.notes.map(note => note.id), ['note-keep']);
+    assert.ok(room.deletedNoteIds.includes('note-delete'));
+    assert.equal(room.listeningDurationMs, beforeDuration);
+
+    await store.publishPlayback(room.code, room.secret, playback({ playing: false }), {
+      listeningDurationMs: 1_000,
+      notes: [
+        {
+          id: 'note-delete',
+          text: 'delete me',
+          positionMs: 10_000,
+          trackTitle: 'Song',
+          createdAt: 1_700_000_000_000
+        },
+        {
+          id: 'note-keep',
+          text: 'keep me',
+          positionMs: 20_000,
+          trackTitle: 'Song',
+          createdAt: 1_700_000_001_000
+        }
+      ],
+      deletedNoteIds: ['note-delete']
+    });
+    assert.deepEqual(room.notes.map(note => note.id), ['note-keep']);
+    assert.equal(room.listeningDurationMs, beforeDuration);
+
+    const reloaded = new RoomStore(file);
+    await reloaded.load();
+    const loaded = reloaded.authenticate(room.code, room.secret);
+    assert.deepEqual(loaded.notes.map(note => note.id), ['note-keep']);
+    assert.ok(loaded.deletedNoteIds.includes('note-delete'));
+
+    await reloaded.publishPlayback(room.code, room.secret, playback({ playing: false }), {
+      notes: [{
+        id: 'note-delete',
+        text: 'delete me',
+        positionMs: 10_000,
+        trackTitle: 'Song',
+        createdAt: 1_700_000_000_000
+      }]
+    });
+    assert.deepEqual(loaded.notes.map(note => note.id), ['note-keep']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('legacy notes without id receive stable ids during sync', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
+  try {
+    const store = new RoomStore(join(dir, 'rooms.json'));
+    const room = await store.create();
+    await store.publishPlayback(room.code, room.secret, playback(), {
+      notes: [{
+        id: '',
+        text: 'legacy note',
+        positionMs: 12_000,
+        trackTitle: 'Legacy Song',
+        createdAt: 1_700_000_002_000
+      }]
+    });
+    assert.match(room.notes[0].id, /^legacy_/);
+    const legacyId = room.notes[0].id;
+    await store.deleteNote(room.code, room.secret, legacyId);
+    assert.equal(room.notes.length, 0);
+    await store.publishPlayback(room.code, room.secret, playback(), {
+      notes: [{
+        id: '',
+        text: 'legacy note',
+        positionMs: 12_000,
+        trackTitle: 'Legacy Song',
+        createdAt: 1_700_000_002_000
+      }]
+    });
+    assert.equal(room.notes.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('new room inherits deleted note tombstones from client history', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
+  try {
+    const store = new RoomStore(join(dir, 'rooms.json'));
+    const room = await store.create();
+    await store.publishPlayback(room.code, room.secret, playback(), {
+      listeningDurationMs: 12_000,
+      deletedNoteIds: ['old-deleted-note'],
+      notes: [
+        {
+          id: 'old-deleted-note',
+          text: 'should stay deleted',
+          positionMs: 8_000,
+          trackTitle: 'Old Song',
+          createdAt: 1_700_000_003_000
+        },
+        {
+          id: 'old-visible-note',
+          text: 'should survive',
+          positionMs: 9_000,
+          trackTitle: 'Old Song',
+          createdAt: 1_700_000_004_000
+        }
+      ]
+    });
+
+    assert.deepEqual(room.notes.map(note => note.id), ['old-visible-note']);
+    assert.ok(room.deletedNoteIds.includes('old-deleted-note'));
+    assert.equal(room.listeningDurationMs, 12_000);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

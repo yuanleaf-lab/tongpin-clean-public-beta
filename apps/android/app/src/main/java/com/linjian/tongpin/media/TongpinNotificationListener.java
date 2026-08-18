@@ -102,10 +102,16 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                         Prefs.saveLastSync(TongpinNotificationListener.this, System.currentTimeMillis());
                         Prefs.saveListeningDurationMs(
                                 TongpinNotificationListener.this,
-                                Math.max(0L, json.optLong("listeningDurationMs", 0L))
+                                Math.max(
+                                        Prefs.listeningDurationMs(TongpinNotificationListener.this),
+                                        Math.max(0L, json.optLong("listeningDurationMs", 0L))
+                                )
                         );
+                        if (json.optJSONArray("deletedNoteIds") != null) {
+                            Prefs.mergeDeletedNoteIds(TongpinNotificationListener.this, json.optJSONArray("deletedNoteIds"));
+                        }
                         if (json.optJSONArray("notes") != null) {
-                            Prefs.saveRoomNotes(TongpinNotificationListener.this, json.optJSONArray("notes").toString());
+                            Prefs.mergeRoomNotes(TongpinNotificationListener.this, json.optJSONArray("notes"));
                         }
                         if (commandInFlight.get().isEmpty() && !localCommandInFlight.get()) {
                             Prefs.saveStatus(TongpinNotificationListener.this, "服务器已连接 · 实时同步中");

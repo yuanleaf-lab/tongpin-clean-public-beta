@@ -5,7 +5,7 @@ import express from 'express';
 import { AiConfigurationError, AiRequestError, askAI } from './ai.js';
 import { handleMcpRequest } from './mcp.js';
 import { RoomStore } from './store.js';
-import { playerNameOf, toPublicRoom, type CommandStatus, type PlaybackCommandType, type PlaybackSnapshot } from './types.js';
+import { playerNameOf, toPublicRoom, type CommandStatus, type ListeningNote, type PlaybackCommandType, type PlaybackSnapshot } from './types.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const dataFile = process.env.DATA_FILE ?? './data/rooms.json';
@@ -118,6 +118,10 @@ app.post('/api/rooms/:code/playback', async (req, res) => {
       nextLyric: text(body.nextLyric, 500) ?? '',
       lyricsSource: text(body.lyricsSource, 120) ?? '',
       lyricsSynced: Boolean(body.lyricsSynced)
+    }, {
+      listeningDurationMs: Number(req.body?.listeningDurationMs),
+      notes: Array.isArray(req.body?.notes) ? req.body.notes as ListeningNote[] : undefined,
+      deletedNoteIds: Array.isArray(req.body?.deletedNoteIds) ? req.body.deletedNoteIds.map(String) : undefined
     });
     res.json(toPublicRoom(room));
   } catch {
@@ -192,6 +196,15 @@ app.post('/api/rooms/:code/notes', async (req, res) => {
     const positionMs = req.body?.positionMs === undefined ? undefined : Math.max(0, Math.trunc(Number(req.body.positionMs)));
     const room = await store.addNote(req.params.code, secretOf(req), noteText, positionMs);
     res.json(toPublicRoom(room));
+  } catch {
+    res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
+  }
+});
+
+app.delete('/api/rooms/:code/notes/:noteId', async (req, res) => {
+  try {
+    const result = await store.deleteNote(req.params.code, secretOf(req), String(req.params.noteId ?? ''));
+    res.json({ ok: true, deleted: result.deleted, noteId: req.params.noteId, room: toPublicRoom(result.room) });
   } catch {
     res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
   }

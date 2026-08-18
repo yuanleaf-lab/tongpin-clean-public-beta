@@ -51,6 +51,7 @@ const songMemoriesOf = (
     : notes;
   const limitedNotes = options.limit === undefined ? orderedNotes : orderedNotes.slice(0, options.limit);
   return limitedNotes.map(note => ({
+    id: note.id,
     text: note.text,
     positionMs: note.positionMs,
     createdAt: note.createdAt
@@ -206,6 +207,23 @@ export function createMcpServer(store: RoomStore): McpServer {
     try {
       const room = await store.addNote(code, roomSecret, text, positionMs);
       return textResult({ ok: true, note: room.notes.at(-1) });
+    } catch {
+      return textResult({ ok: false, error: roomAuthError });
+    }
+  });
+
+  server.registerTool('delete_listening_note', {
+    title: 'Delete listening note',
+    description: 'Delete one listening note by noteId. Requires code and roomSecret.',
+    inputSchema: {
+      code: z.string().min(6),
+      roomSecret: z.string().min(10),
+      noteId: z.string().min(1).max(120)
+    }
+  }, async ({ code, roomSecret, noteId }) => {
+    try {
+      const result = await store.deleteNote(code, roomSecret, noteId);
+      return textResult({ ok: true, noteId, deleted: result.deleted });
     } catch {
       return textResult({ ok: false, error: roomAuthError });
     }

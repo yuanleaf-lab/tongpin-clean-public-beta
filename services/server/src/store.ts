@@ -6,6 +6,33 @@ import type { CommandResult, CommandStatus, ListeningNote, PlaybackCommand, Play
 const roomCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const MAX_LISTENING_INCREMENT_MS = 10_000;
 
+interface ClientListeningState {
+  listeningDurationMs?: number;
+  notes?: ListeningNote[];
+  deletedNoteIds?: string[];
+}
+
+const javaHashHex = (value: string): string => {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = Math.imul(31, hash) + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return (hash >>> 0).toString(16);
+};
+
+const stableNoteId = (note: Partial<ListeningNote>): string => {
+  const id = String(note.id ?? '').trim();
+  if (id) return id;
+  const key = [
+    String(note.trackTitle ?? ''),
+    Math.trunc(Number(note.positionMs ?? 0)),
+    Math.trunc(Number(note.createdAt ?? 0)),
+    String(note.text ?? '')
+  ].join('|');
+  return `legacy_${javaHashHex(key)}`;
+};
+
 export class RoomStore {
   private rooms = new Map<string, Room>();
   private writeQueue: Promise<void> = Promise.resolve();
@@ -18,7 +45,12 @@ export class RoomStore {
       const parsed = JSON.parse(raw) as Room[];
       this.rooms = new Map(parsed.map(room => [room.code, {
         ...room,
-        listeningDurationMs: Math.max(0, Number(room.listeningDurationMs ?? 0))
+        listeningDurationMs: Math.max(0, Number(room.listeningDurationMs ?? 0)),
+        deletedNoteIds: Array.isArray(room.deletedNoteIds) ? room.deletedNoteIds.filter(Boolean) : [],
+        notes: (room.notes ?? []).map(note => ({ ...note, id: stableNoteId(note) })).filter(note => {
+          const deleted = Array.isArray(room.deletedNoteIds) && room.deletedNoteIds.includes(note.id);
+          return note.id && !deleted;
+        })
       }]));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -49,7 +81,8 @@ export class RoomStore {
       playback: null,
       pendingCommand: null,
       lastCommandResult: null,
-      notes: []
+      notes: [],
+      deletedNoteIds: []
     };
     this.rooms.set(code, room);
     await this.persist();
@@ -62,7 +95,51 @@ export class RoomStore {
     return room;
   }
 
-  async publishPlayback(code: string, secret: string, snapshot: PlaybackSnapshot): Promise<Room> {
+  private mergeClientNotes(room: Room, notes?: ListeningNote[]): boolean {
+    if (!Array.isArray(notes) || notes.length === 0) return false;
+    const deletedIds = new Set(room.deletedNoteIds ?? []);
+    const existingIds = new Set(room.notes.map(note => note.id));
+    let changed = false;
+    for (const incoming of notes) {
+      const id = stableNoteId(incoming ?? {});
+      const text = String(incoming?.text ?? '').trim();
+      if (!id || !text || deletedIds.has(id) || existingIds.has(id)) continue;
+      room.notes.push({
+        id,
+        text: text.slice(0, 500),
+        positionMs: Math.max(0, Math.trunc(Number(incoming.positionMs ?? 0))),
+        trackTitle: String(incoming.trackTitle ?? '未知歌曲').trim().slice(0, 200) || '未知歌曲',
+        createdAt: Number.isFinite(incoming.createdAt) ? Number(incoming.createdAt) : Date.now()
+      });
+      existingIds.add(id);
+      changed = true;
+    }
+    if (changed) {
+      room.notes = room.notes
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .slice(-200);
+    }
+    return changed;
+  }
+
+  private mergeDeletedNoteIds(room: Room, deletedNoteIds?: string[]): boolean {
+    if (!Array.isArray(deletedNoteIds) || deletedNoteIds.length === 0) return false;
+    const next = new Set(room.deletedNoteIds ?? []);
+    let changed = false;
+    for (const value of deletedNoteIds) {
+      const id = String(value ?? '').trim();
+      if (!id || next.has(id)) continue;
+      next.add(id);
+      changed = true;
+    }
+    if (!changed) return false;
+    room.deletedNoteIds = [...next];
+    const before = room.notes.length;
+    room.notes = room.notes.filter(note => !next.has(note.id));
+    return changed || before !== room.notes.length;
+  }
+
+  async publishPlayback(code: string, secret: string, snapshot: PlaybackSnapshot, clientState?: ClientListeningState): Promise<Room> {
     const room = this.authenticate(code, secret);
     const now = Date.now();
     const previous = room.playback;
@@ -71,8 +148,13 @@ export class RoomStore {
       room.listeningDurationMs = Math.max(0, room.listeningDurationMs ?? 0)
         + Math.min(MAX_LISTENING_INCREMENT_MS, elapsed);
     }
+    if (Number.isFinite(clientState?.listeningDurationMs)) {
+      room.listeningDurationMs = Math.max(room.listeningDurationMs, Math.max(0, Math.trunc(clientState!.listeningDurationMs!)));
+    }
+    const deletedChanged = this.mergeDeletedNoteIds(room, clientState?.deletedNoteIds);
+    const notesChanged = this.mergeClientNotes(room, clientState?.notes);
     room.playback = { ...snapshot, publishedAt: now };
-    room.revision += 1;
+    room.revision += (deletedChanged || notesChanged) ? 2 : 1;
     room.updatedAt = now;
     await this.persist();
     return room;
@@ -127,5 +209,19 @@ export class RoomStore {
     room.updatedAt = Date.now();
     await this.persist();
     return room;
+  }
+
+  async deleteNote(code: string, secret: string, noteId: string): Promise<{ room: Room; deleted: boolean }> {
+    const room = this.authenticate(code, secret);
+    const id = noteId.trim();
+    if (!id) throw new Error('INVALID_NOTE_ID');
+    const before = room.notes.length;
+    room.deletedNoteIds = [...new Set([...(room.deletedNoteIds ?? []), id])];
+    room.notes = room.notes.filter(note => note.id !== id);
+    const deleted = room.notes.length !== before;
+    room.revision += 1;
+    room.updatedAt = Date.now();
+    await this.persist();
+    return { room, deleted };
   }
 }

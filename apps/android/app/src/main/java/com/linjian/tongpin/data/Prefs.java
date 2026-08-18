@@ -3,9 +3,16 @@ package com.linjian.tongpin.data;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 public final class Prefs {
     private static final String NAME = "tongpin_clean";
@@ -64,8 +71,6 @@ public final class Prefs {
                 .remove("room_secret")
                 .remove("last_command_id")
                 .remove("last_command_status")
-                .remove("room_notes")
-                .remove("listening_duration_ms")
                 .apply();
     }
 
@@ -73,7 +78,15 @@ public final class Prefs {
     public static JSONArray roomNotes(Context context) {
         String raw = prefs(context).getString("room_notes", "[]");
         try {
-            return new JSONArray(raw == null || raw.isEmpty() ? "[]" : raw);
+            JSONArray notes = withStableNoteIds(new JSONArray(raw == null || raw.isEmpty() ? "[]" : raw));
+            Set<String> deletedIds = deletedNoteIdSet(context);
+            JSONArray visible = new JSONArray();
+            for (int i = 0; i < notes.length(); i++) {
+                JSONObject note = notes.optJSONObject(i);
+                if (note == null) continue;
+                if (!deletedIds.contains(stableNoteId(note))) visible.put(note);
+            }
+            return visible;
         } catch (Throwable ignored) {
             return new JSONArray();
         }
@@ -82,6 +95,118 @@ public final class Prefs {
     public static void saveRoomNotes(Context context, String rawJsonArray) {
         String value = rawJsonArray == null || rawJsonArray.trim().isEmpty() ? "[]" : rawJsonArray.trim();
         prefs(context).edit().putString("room_notes", value).apply();
+    }
+
+    public static JSONArray deletedNoteIds(Context context) {
+        String raw = prefs(context).getString("deleted_note_ids", "[]");
+        try {
+            return new JSONArray(raw == null || raw.isEmpty() ? "[]" : raw);
+        } catch (Throwable ignored) {
+            return new JSONArray();
+        }
+    }
+
+    public static void mergeDeletedNoteIds(Context context, JSONArray incomingIds) {
+        if (incomingIds == null) return;
+        LinkedHashSet<String> ids = deletedNoteIdSet(context);
+        for (int i = 0; i < incomingIds.length(); i++) {
+            String id = incomingIds.optString(i, "").trim();
+            if (!id.isEmpty()) ids.add(id);
+        }
+        saveDeletedNoteIds(context, ids);
+        removeDeletedNotes(context);
+    }
+
+    public static void deleteRoomNote(Context context, String noteId) {
+        String id = noteId == null ? "" : noteId.trim();
+        if (id.isEmpty()) return;
+        LinkedHashSet<String> ids = deletedNoteIdSet(context);
+        ids.add(id);
+        saveDeletedNoteIds(context, ids);
+        removeDeletedNotes(context);
+    }
+
+    public static void mergeRoomNotes(Context context, JSONArray incomingNotes) {
+        if (incomingNotes == null) return;
+        Set<String> deletedIds = deletedNoteIdSet(context);
+        LinkedHashMap<String, JSONObject> merged = new LinkedHashMap<>();
+        addNotesToMap(merged, roomNotes(context), deletedIds);
+        addNotesToMap(merged, incomingNotes, deletedIds);
+        List<JSONObject> notes = new ArrayList<>(merged.values());
+        notes.sort(Comparator.comparingLong(note -> note.optLong("createdAt", 0L)));
+        JSONArray output = new JSONArray();
+        int start = Math.max(0, notes.size() - 200);
+        for (int i = start; i < notes.size(); i++) {
+            output.put(notes.get(i));
+        }
+        saveRoomNotes(context, output.toString());
+    }
+
+    private static void removeDeletedNotes(Context context) {
+        Set<String> deletedIds = deletedNoteIdSet(context);
+        JSONArray notes = roomNotes(context);
+        JSONArray output = new JSONArray();
+        for (int i = 0; i < notes.length(); i++) {
+            JSONObject note = notes.optJSONObject(i);
+            if (note == null) continue;
+            String id = stableNoteId(note);
+            if (!deletedIds.contains(id)) output.put(note);
+        }
+        saveRoomNotes(context, output.toString());
+    }
+
+    private static LinkedHashSet<String> deletedNoteIdSet(Context context) {
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        JSONArray array = deletedNoteIds(context);
+        for (int i = 0; i < array.length(); i++) {
+            String id = array.optString(i, "").trim();
+            if (!id.isEmpty()) ids.add(id);
+        }
+        return ids;
+    }
+
+    private static void saveDeletedNoteIds(Context context, LinkedHashSet<String> ids) {
+        JSONArray array = new JSONArray();
+        for (String id : ids) array.put(id);
+        prefs(context).edit().putString("deleted_note_ids", array.toString()).apply();
+    }
+
+    private static JSONArray withStableNoteIds(JSONArray notes) {
+        JSONArray output = new JSONArray();
+        for (int i = 0; i < notes.length(); i++) {
+            JSONObject note = notes.optJSONObject(i);
+            if (note == null) continue;
+            stableNoteId(note);
+            output.put(note);
+        }
+        return output;
+    }
+
+    public static String stableNoteId(JSONObject note) {
+        String id = note.optString("id", "").trim();
+        if (!id.isEmpty()) return id;
+        String key = note.optString("trackTitle", "")
+                + "|" + note.optLong("positionMs", 0L)
+                + "|" + note.optLong("createdAt", 0L)
+                + "|" + note.optString("text", "");
+        id = "legacy_" + Integer.toHexString(key.hashCode());
+        try {
+            note.put("id", id);
+        } catch (Throwable ignored) {
+        }
+        return id;
+    }
+
+    private static void addNotesToMap(LinkedHashMap<String, JSONObject> target, JSONArray notes, Set<String> deletedIds) {
+        for (int i = 0; i < notes.length(); i++) {
+            JSONObject note = notes.optJSONObject(i);
+            if (note == null) continue;
+            String text = note.optString("text", "").trim();
+            if (text.isEmpty()) continue;
+            String id = stableNoteId(note);
+            if (deletedIds.contains(id)) continue;
+            target.put(id, note);
+        }
     }
 
 
