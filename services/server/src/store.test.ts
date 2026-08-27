@@ -96,6 +96,32 @@ test('public room projects a recent playing position without mutating stored dat
   }
 });
 
+test('search command keeps its final device-confirmed result by command id', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tongpin-store-'));
+  try {
+    const store = new RoomStore(join(dir, 'rooms.json'));
+    await store.load();
+    const room = await store.create();
+    const queued = await store.setCommand(room.code, room.secret, {
+      type: 'search_play', title: 'Anchor', artist: 'Novo Amor', query: 'Anchor Novo Amor'
+    });
+    const commandId = queued.pendingCommand!.id;
+    const pickedUp = await store.acknowledgeCommand(room.code, room.secret, commandId, 'picked_up', 'picked up');
+    assert.equal(pickedUp.pendingCommand?.id, commandId);
+    const confirmed = await store.acknowledgeCommand(room.code, room.secret, commandId, 'playback_confirmed', 'confirmed', {
+      target: { title: 'Anchor', artist: 'Novo Amor' },
+      actualPlayback: { title: 'Anchor', artist: 'Novo Amor' }
+    });
+    assert.equal(confirmed.pendingCommand, null);
+    assert.equal(confirmed.commandResults.find(result => result.commandId === commandId)?.status, 'playback_confirmed');
+    assert.deepEqual(confirmed.commandResults.find(result => result.commandId === commandId)?.details?.actualPlayback, {
+      title: 'Anchor', artist: 'Novo Amor'
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('public room exposes playerName derived from packageName', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {

@@ -170,25 +170,45 @@ export function createMcpServer(store: RoomStore): McpServer {
 
   server.registerTool('search_and_play', {
     title: 'Search and play',
-    description: 'Ask the phone to search and play a song. Requires code and roomSecret.',
+    description: 'Queue a strict title-and-artist search on the phone. The initial response only proves queuing; use get_command_status for the final device result.',
     inputSchema: {
       code: z.string().min(6),
       roomSecret: z.string().min(10),
       title: z.string().min(1).max(160),
-      artist: z.string().max(160).optional()
+      artist: z.string().min(1).max(160)
     }
   }, async ({ code, roomSecret, title, artist }) => {
     try {
       const cleanTitle = title.trim();
-      const cleanArtist = artist?.trim() ?? '';
+      const cleanArtist = artist.trim();
       const query = [cleanTitle, cleanArtist].filter(Boolean).join(' ');
       const room = await store.setCommand(code, roomSecret, {
         type: 'search_play',
         query,
         title: cleanTitle,
-        artist: cleanArtist || undefined
+        artist: cleanArtist
       });
-      return textResult({ ok: true, command: room.pendingCommand, result: room.lastCommandResult });
+      return textResult({ ok: true, commandId: room.pendingCommand?.id, command: room.pendingCommand, result: room.lastCommandResult, note: 'queued only means the server accepted the command; query get_command_status for device execution.' });
+    } catch {
+      return textResult({ ok: false, error: roomAuthError });
+    }
+  });
+
+  server.registerTool('get_command_status', {
+    title: 'Read command execution status',
+    description: 'Read the latest execution status for one command, including selected and confirmed playback metadata.',
+    inputSchema: {
+      code: z.string().min(6),
+      roomSecret: z.string().min(10),
+      commandId: z.string().min(1)
+    }
+  }, async ({ code, roomSecret, commandId }) => {
+    try {
+      const room = store.authenticate(code, roomSecret);
+      const result = (room.commandResults ?? []).find(value => value.commandId === commandId);
+      return textResult(result
+        ? { ok: true, commandId, pending: room.pendingCommand?.id === commandId, result }
+        : { ok: false, error: 'COMMAND_NOT_FOUND' });
     } catch {
       return textResult({ ok: false, error: roomAuthError });
     }

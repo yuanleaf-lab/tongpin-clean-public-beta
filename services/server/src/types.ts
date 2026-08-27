@@ -1,5 +1,15 @@
 export type PlaybackCommandType = 'play' | 'pause' | 'seek' | 'next' | 'previous' | 'search_play' | 'switch_room';
-export type CommandStatus = 'queued' | 'received' | 'executed' | 'failed';
+export type CommandStatus =
+  | 'queued'
+  | 'received'
+  | 'picked_up'
+  | 'search_success'
+  | 'search_failed'
+  | 'playback_confirmed'
+  | 'playback_mismatch'
+  | 'execution_failed'
+  | 'executed'
+  | 'failed';
 
 export interface PlaybackCommand {
   id: string;
@@ -18,6 +28,19 @@ export interface CommandResult {
   status: CommandStatus;
   message: string;
   updatedAt: number;
+  details?: CommandResultDetails;
+}
+
+export interface CommandTrack {
+  title: string;
+  artist: string;
+}
+
+export interface CommandResultDetails {
+  query?: string;
+  target?: CommandTrack;
+  selectedCandidate?: CommandTrack;
+  actualPlayback?: CommandTrack;
 }
 
 export interface PlaybackSnapshot {
@@ -56,6 +79,7 @@ export interface Room {
   playback: PlaybackSnapshot | null;
   pendingCommand: PlaybackCommand | null;
   lastCommandResult: CommandResult | null;
+  commandResults: CommandResult[];
   notes: ListeningNote[];
   deletedNoteIds: string[];
 }
@@ -101,6 +125,7 @@ export const toPublicRoom = (room: Room): PublicRoom => ({
   playback: room.playback ? projectPlaybackPosition(room.playback) : null,
   pendingCommand: room.pendingCommand,
   lastCommandResult: room.lastCommandResult,
+  commandResults: room.commandResults ?? [],
   notes: room.notes,
   deletedNoteIds: room.deletedNoteIds ?? []
 });

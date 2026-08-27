@@ -5,7 +5,7 @@ import express from 'express';
 import { AiConfigurationError, AiRequestError, askAI } from './ai.js';
 import { handleMcpRequest } from './mcp.js';
 import { RoomStore } from './store.js';
-import { playerNameOf, toPublicRoom, type CommandStatus, type ListeningNote, type PlaybackCommandType, type PlaybackSnapshot } from './types.js';
+import { playerNameOf, toPublicRoom, type CommandResultDetails, type CommandStatus, type ListeningNote, type PlaybackCommandType, type PlaybackSnapshot } from './types.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const dataFile = process.env.DATA_FILE ?? './data/rooms.json';
@@ -146,7 +146,7 @@ app.post('/api/rooms/:code/commands', async (req, res) => {
     const query = type === 'search_play'
       ? String(req.body?.query ?? [title, artist].filter(Boolean).join(' ')).trim().slice(0, 320)
       : undefined;
-    if (type === 'search_play' && (!title || !query)) {
+    if (type === 'search_play' && (!title || !artist || !query)) {
       res.status(400).json({ error: 'INVALID_SEARCH_QUERY' });
       return;
     }
@@ -174,12 +174,13 @@ app.post('/api/rooms/:code/commands', async (req, res) => {
 app.post('/api/rooms/:code/commands/:id/ack', async (req, res) => {
   try {
     const status = req.body?.status as CommandStatus;
-    if (!['received', 'executed', 'failed'].includes(status)) {
+    if (!['received', 'picked_up', 'search_success', 'search_failed', 'playback_confirmed', 'playback_mismatch', 'execution_failed', 'executed', 'failed'].includes(status)) {
       res.status(400).json({ error: 'INVALID_STATUS' });
       return;
     }
     const message = String(req.body?.message ?? '').trim() || status;
-    const room = await store.acknowledgeCommand(req.params.code, secretOf(req), req.params.id, status, message);
+    const details = commandResultDetails(req.body?.details);
+    const room = await store.acknowledgeCommand(req.params.code, secretOf(req), req.params.id, status, message, details);
     res.json(toPublicRoom(room));
   } catch {
     res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
@@ -200,6 +201,40 @@ app.post('/api/rooms/:code/notes', async (req, res) => {
     res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
   }
 });
+
+app.get('/api/rooms/:code/commands/:id', (req, res) => {
+  try {
+    const room = store.authenticate(req.params.code, secretOf(req));
+    const result = (room.commandResults ?? []).find(value => value.commandId === req.params.id);
+    if (!result) {
+      res.status(404).json({ error: 'COMMAND_NOT_FOUND' });
+      return;
+    }
+    res.json({ commandId: req.params.id, result, pending: room.pendingCommand?.id === req.params.id });
+  } catch {
+    res.status(404).json({ error: 'ROOM_NOT_FOUND_OR_SECRET_INVALID' });
+  }
+});
+
+const commandTrack = (value: unknown): { title: string; artist: string } | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const title = String(record.title ?? '').trim().slice(0, 200);
+  const artist = String(record.artist ?? '').trim().slice(0, 200);
+  return title || artist ? { title, artist } : undefined;
+};
+
+const commandResultDetails = (value: unknown): CommandResultDetails | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const details: CommandResultDetails = {
+    query: text(record.query, 320),
+    target: commandTrack(record.target),
+    selectedCandidate: commandTrack(record.selectedCandidate),
+    actualPlayback: commandTrack(record.actualPlayback)
+  };
+  return Object.values(details).some(Boolean) ? details : undefined;
+};
 
 app.delete('/api/rooms/:code/notes/:noteId', async (req, res) => {
   try {

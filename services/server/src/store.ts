@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { customAlphabet, nanoid } from 'nanoid';
-import type { CommandResult, CommandStatus, ListeningNote, PlaybackCommand, PlaybackSnapshot, Room } from './types.js';
+import type { CommandResult, CommandResultDetails, CommandStatus, ListeningNote, PlaybackCommand, PlaybackSnapshot, Room } from './types.js';
 
 const roomCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const MAX_LISTENING_INCREMENT_MS = 10_000;
@@ -50,7 +50,10 @@ export class RoomStore {
         notes: (room.notes ?? []).map(note => ({ ...note, id: stableNoteId(note) })).filter(note => {
           const deleted = Array.isArray(room.deletedNoteIds) && room.deletedNoteIds.includes(note.id);
           return note.id && !deleted;
-        })
+        }),
+        commandResults: Array.isArray(room.commandResults)
+          ? room.commandResults.slice(-100)
+          : room.lastCommandResult ? [room.lastCommandResult] : []
       }]));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -81,6 +84,7 @@ export class RoomStore {
       playback: null,
       pendingCommand: null,
       lastCommandResult: null,
+      commandResults: [],
       notes: [],
       deletedNoteIds: []
     };
@@ -170,22 +174,35 @@ export class RoomStore {
       message: '命令已写入服务器，等待手机领取',
       updatedAt: createdAt
     };
+    room.commandResults = [...(room.commandResults ?? []), room.lastCommandResult].slice(-100);
     room.revision += 1;
     room.updatedAt = createdAt;
     await this.persist();
     return room;
   }
 
-  async acknowledgeCommand(code: string, secret: string, commandId: string, status: CommandStatus, message: string): Promise<Room> {
+  async acknowledgeCommand(
+    code: string,
+    secret: string,
+    commandId: string,
+    status: CommandStatus,
+    message: string,
+    details?: CommandResultDetails
+  ): Promise<Room> {
     const room = this.authenticate(code, secret);
     const result: CommandResult = {
       commandId,
       status,
       message: message.slice(0, 300),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      details
     };
     room.lastCommandResult = result;
-    if (room.pendingCommand?.id === commandId && (status === 'executed' || status === 'failed')) {
+    const previousIndex = (room.commandResults ?? []).findIndex(value => value.commandId === commandId);
+    if (previousIndex >= 0) room.commandResults[previousIndex] = result;
+    else room.commandResults = [...(room.commandResults ?? []), result];
+    room.commandResults = room.commandResults.slice(-100);
+    if (room.pendingCommand?.id === commandId && isTerminalCommandStatus(status)) {
       room.pendingCommand = null;
     }
     room.revision += 1;
@@ -225,3 +242,7 @@ export class RoomStore {
     return { room, deleted };
   }
 }
+
+const isTerminalCommandStatus = (status: CommandStatus): boolean => [
+  'executed', 'failed', 'search_failed', 'playback_confirmed', 'playback_mismatch', 'execution_failed'
+].includes(status);
