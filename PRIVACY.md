@@ -19,11 +19,12 @@
 
 ## 数据保存位置
 
-每位测试者应自行部署服务器。默认免费 Render 配置把房间数据保存在临时文件系统中，服务重启或重新部署后数据可能消失。房间密钥等同于房间密码，请勿公开分享。
+每位测试者应自行部署服务器。房间数据保存在 Supabase Postgres 的 JSONB 快照中，Render 服务端通过 `DATABASE_URL` 直接连接私有 schema；该快照不通过 Supabase Data API 对客户端公开。房间密钥等同于房间密码，请勿公开分享。
 
 ## 第三方服务
 
 - Render：托管用户自行部署的服务器。
+- Supabase：保存房间、命令状态和听歌笔记的 Postgres 数据库。
 - LRCLIB：按歌曲信息查询公开歌词。
 - GitHub Actions：构建测试版 APK。
 

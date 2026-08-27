@@ -11,5 +11,3 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22
-      - key: DATA_FILE
-        value: /tmp/tongpin-rooms.json

@@ -67,12 +67,12 @@
 - 影响范围：仅修复 `/control` 和 public 静态目录路径解析，不改变业务逻辑、REST API 或 MCP 行为。
 - 是否建议保留：建议保留。
 
-## 6. 部署前风险
+## 6. 部署前风险（历史测试状态）
 
-- Render 临时存储问题：
-  - 当前 `render.yaml` 使用 `DATA_FILE=/tmp/tongpin-rooms.json`。
-  - `/tmp` 为临时存储，服务重启或重新部署后房间、笔记和状态可能丢失。
-  - 长期使用建议改为持久化磁盘或数据库。
+- Render 临时存储问题（迁移前）：
+  - 本报告编写时，`render.yaml` 使用 `DATA_FILE=/tmp/tongpin-rooms.json`。
+  - 当时 `/tmp` 为临时存储，服务重启或重新部署后房间、笔记和状态可能丢失。
+  - 当前版本已改为 Supabase Postgres 单行 JSONB 快照持久化，Render 重启后会重新读取该快照。
 
 - Android 服务地址切换：
   - 本地测试地址为 `http://192.168.0.100:3000`。
@@ -87,4 +87,3 @@
 - Android 后台限制：
   - vivo 等厂商系统可能限制后台服务。
   - 真机长期测试前建议检查后台运行、自启动和省电策略。
-
