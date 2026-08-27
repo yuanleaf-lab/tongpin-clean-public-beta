@@ -567,8 +567,9 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                 RoomApi.acknowledgeCommandSync(
                         TongpinNotificationListener.this,
                         id,
-                        "received",
-                        "手机已收到命令，播放器处理中"
+                        "search_play".equals(command.type) ? "picked_up" : "received",
+                        "search_play".equals(command.type) ? "手机已领取自动点歌命令，正在搜索" : "手机已收到命令，播放器处理中",
+                        "search_play".equals(command.type) ? searchDetails(command, null, null) : null
                 );
             } catch (Throwable ignored) {
             }
@@ -655,10 +656,17 @@ public final class TongpinNotificationListener extends NotificationListenerServi
     ) {
         long[] delays = "search_play".equals(command.type) ? SEARCH_VERIFY_DELAYS_MS : VERIFY_DELAYS_MS;
         if (attempt >= delays.length) {
-            String message = "search_play".equals(command.type)
-                    ? "自动点歌未成功，请确认已开启“同频歌词与自动点歌”无障碍服务"
-                    : "播放器未响应，请回到当前播放器后重试";
-            finishCommand(command, remote, false, message);
+            if ("search_play".equals(command.type)) {
+                PlaybackSnapshot current = buildSnapshot();
+                String status = hasSearchCandidate(command.id) && hasPlaybackIdentity(current)
+                        ? "playback_mismatch" : "search_failed";
+                String message = "playback_mismatch".equals(status)
+                        ? "QQ 音乐实际播放的歌曲与目标歌曲不匹配"
+                        : "未能找到可确认匹配的 QQ 音乐搜索结果";
+                finishCommand(command, remote, status, message, searchDetails(command, current, null));
+            } else {
+                finishCommand(command, remote, false, "播放器未响应，请回到当前播放器后重试");
+            }
             return;
         }
         mainHandler.postDelayed(() -> {
@@ -668,7 +676,11 @@ public final class TongpinNotificationListener extends NotificationListenerServi
             captureAndPublish(true);
 
             if (isCommandSatisfied(command, before, current)) {
-                finishCommand(command, remote, true, successMessage(command));
+                if ("search_play".equals(command.type)) {
+                    finishCommand(command, remote, "playback_confirmed", "已确认播放「" + current.title + "」· " + current.artist, searchDetails(command, current, null));
+                } else {
+                    finishCommand(command, remote, true, successMessage(command));
+                }
                 return;
             }
 
@@ -768,9 +780,7 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                 if (command.positionMs == null) return false;
                 return Math.abs(current.positionMs - command.positionMs) <= 3_000L;
             case "search_play":
-                if (!current.playing || current.title.isEmpty()) return false;
-                String expected = command.title.isEmpty() ? command.query : command.title;
-                return fuzzyContains(current.title, expected);
+                return current.playing && trackMatches(command.title, command.artist, current);
             default:
                 return false;
         }
@@ -789,13 +799,17 @@ public final class TongpinNotificationListener extends NotificationListenerServi
     }
 
     private void finishCommand(RemoteCommand command, boolean remote, boolean success, String message) {
-        String status = success ? "executed" : "failed";
+        finishCommand(command, remote, success ? "executed" : "failed", message, null);
+    }
+
+    private void finishCommand(RemoteCommand command, boolean remote, String status, String message, JSONObject details) {
         Prefs.saveLastCommandId(this, command.id);
         Prefs.saveLastCommandStatus(this, status);
         Prefs.saveLastCommandResult(this, message);
-        Prefs.saveStatus(this, success ? message : "控制失败 · " + message);
+        boolean successful = "executed".equals(status) || "playback_confirmed".equals(status);
+        Prefs.saveStatus(this, successful ? message : "控制失败 · " + message);
         if ("search_play".equals(command.type)) {
-            QQMusicLyricsAccessibilityService.finishSearchAndPlay(command.id, success);
+            QQMusicLyricsAccessibilityService.finishSearchAndPlay(command.id, "playback_confirmed".equals(status));
         }
 
         if (remote) {
@@ -805,7 +819,8 @@ public final class TongpinNotificationListener extends NotificationListenerServi
                             TongpinNotificationListener.this,
                             command.id,
                             status,
-                            message
+                            message,
+                            details
                     );
                 } catch (Throwable ignored) {
                 } finally {
@@ -817,6 +832,58 @@ public final class TongpinNotificationListener extends NotificationListenerServi
         }
         captureAndPublish(true);
         scheduleCaptureBurst();
+    }
+
+    public static void reportSearchCandidate(String commandId, String query, String title, String artist, String candidateText) {
+        TongpinNotificationListener service = instance;
+        if (service == null || commandId == null || commandId.isEmpty()) return;
+        service.commandNetwork.execute(() -> {
+            try {
+                RemoteCommand command = new RemoteCommand(commandId, "search_play", null, query, title, artist, "", "");
+                JSONObject details = service.searchDetails(command, null, candidateText);
+                service.recordSearchCandidate(commandId);
+                RoomApi.acknowledgeCommandSync(service, commandId, "search_success", "已选择 QQ 音乐严格匹配候选结果", details);
+            } catch (Throwable error) {
+                Log.w(TAG, "Unable to acknowledge search candidate", error);
+            }
+        });
+    }
+
+    private final java.util.Set<String> searchCandidateIds = Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    private void recordSearchCandidate(String commandId) {
+        searchCandidateIds.add(commandId);
+    }
+
+    private boolean hasSearchCandidate(String commandId) {
+        return searchCandidateIds.contains(commandId);
+    }
+
+    private static boolean hasPlaybackIdentity(PlaybackSnapshot snapshot) {
+        return snapshot != null && !snapshot.title.trim().isEmpty() && !snapshot.artist.trim().isEmpty();
+    }
+
+    private static boolean trackMatches(String title, String artist, PlaybackSnapshot current) {
+        return current != null
+                && normalizeForMatch(title).equals(normalizeForMatch(current.title))
+                && normalizeForMatch(artist).equals(normalizeForMatch(current.artist));
+    }
+
+    private JSONObject searchDetails(RemoteCommand command, PlaybackSnapshot current, String candidateText) {
+        try {
+            JSONObject details = new JSONObject()
+                    .put("query", command.query)
+                    .put("target", new JSONObject().put("title", command.title).put("artist", command.artist));
+            if (candidateText != null && !candidateText.trim().isEmpty()) {
+                details.put("selectedCandidate", new JSONObject().put("title", command.title).put("artist", command.artist));
+            }
+            if (current != null) {
+                details.put("actualPlayback", new JSONObject().put("title", current.title).put("artist", current.artist));
+            }
+            return details;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private void retryFinalAcknowledgement(String id, String status, String message) {

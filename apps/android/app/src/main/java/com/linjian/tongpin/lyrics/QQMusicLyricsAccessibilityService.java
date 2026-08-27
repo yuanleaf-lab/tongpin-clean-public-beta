@@ -258,6 +258,7 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         long now = System.currentTimeMillis();
         if (now - request.startedAt > AUTOMATION_TIMEOUT_MS) {
             Prefs.saveStatus(this, "自动点歌 · 搜索界面操作超时");
+            Log.w(TAG, "search automation timed out commandId=" + request.commandId);
             searchRequest = null;
             return;
         }
@@ -281,11 +282,20 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
                 Log.d(TAG, "search input already visible");
                 request.stage = SearchRequest.STAGE_ENTER_QUERY;
             } else {
+                if (now - request.lastActionAt < 700L) return;
+                if (request.searchEntryTapped && !request.searchContextRecovered) {
+                    Log.d(TAG, "search input did not appear; returning to a searchable QQ Music screen");
+                    performGlobalAction(GLOBAL_ACTION_BACK);
+                    request.searchContextRecovered = true;
+                    request.lastActionAt = now;
+                    return;
+                }
                 AccessibilityNodeInfo searchButton = findSearchButton(root);
                 Log.d(TAG, "find search entry result=" + (searchButton != null));
-                boolean clickedSearchEntry = searchButton != null && clickNode(searchButton);
+                boolean clickedSearchEntry = searchButton != null && tapNode(searchButton);
                 Log.d(TAG, "click search entry result=" + clickedSearchEntry);
                 if (clickedSearchEntry) {
+                    request.searchEntryTapped = true;
                     request.lastActionAt = now;
                     Prefs.saveStatus(this, "自动点歌 · 已打开搜索");
                 }
@@ -317,24 +327,33 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
             boolean clickedResult = result != null && clickNode(result);
             Log.d(TAG, "click best result result=" + clickedResult);
             if (clickedResult) {
+                TongpinNotificationListener.reportSearchCandidate(
+                        request.commandId,
+                        request.query,
+                        request.title,
+                        request.artist,
+                        flattenText(result, 3)
+                );
                 request.stage = SearchRequest.STAGE_WAIT_PLAYBACK;
                 request.lastActionAt = now;
                 Prefs.saveStatus(this, "自动点歌 · 已点击最匹配结果");
                 return;
             }
 
-            if (!request.simplified && now - request.lastActionAt > 5_500L) {
-                edit = findEditable(root);
-                boolean titleSet = edit != null && !request.title.isEmpty() && setNodeText(edit, request.title);
-                Log.d(TAG, "set simplified title text result=" + titleSet);
-                if (titleSet) {
-                    request.simplified = true;
-                    request.lastActionAt = now;
-                    Prefs.saveStatus(this, "自动点歌 · 改用歌名重新搜索");
-                    handler.postDelayed(() -> submitSearchIfPossible(), 420L);
-                }
-            } else if (now - request.lastActionAt > 1_200L) {
+            if (now - request.lastActionAt > 1_200L) {
                 submitSearchIfPossible();
+            }
+        }
+
+        if (request.stage == SearchRequest.STAGE_WAIT_PLAYBACK && !request.playActionAttempted
+                && now - request.lastActionAt >= 650L) {
+            AccessibilityNodeInfo playButton = findConfirmedPlayButton(root, request.title, request.artist);
+            boolean clickedPlayButton = playButton != null && tapNode(playButton);
+            Log.d(TAG, "click confirmed play button result=" + clickedPlayButton);
+            if (clickedPlayButton) {
+                request.playActionAttempted = true;
+                request.lastActionAt = now;
+                Prefs.saveStatus(this, "自动点歌 · 正在播放严格匹配结果");
             }
         }
     }
@@ -409,6 +428,35 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         return Collections.max(values, Comparator.comparingInt(value -> value.score)).node;
     }
 
+    private AccessibilityNodeInfo findConfirmedPlayButton(AccessibilityNodeInfo root, String title, String artist) {
+        if (!hasExactText(root, normalize(title), 0) || !hasExactText(root, normalize(artist), 0)) return null;
+        return findTextButton(root, "全部播放", 0);
+    }
+
+    private boolean hasExactText(AccessibilityNodeInfo node, String expected, int depth) {
+        if (node == null || depth > 30 || expected.isEmpty()) return false;
+        String text = normalize(clean(node.getText()));
+        String description = normalize(clean(node.getContentDescription()));
+        if (expected.equals(text) || expected.equals(description)) return true;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            if (hasExactText(node.getChild(i), expected, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    private AccessibilityNodeInfo findTextButton(AccessibilityNodeInfo node, String label, int depth) {
+        if (node == null || depth > 30) return null;
+        if (label.equals(clean(node.getText())) || label.equals(clean(node.getContentDescription()))) {
+            AccessibilityNodeInfo clickable = clickableAncestor(node, 5);
+            if (clickable != null) return clickable;
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo found = findTextButton(node.getChild(i), label, depth + 1);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
     private void collectResultCandidates(
             AccessibilityNodeInfo node,
             String title,
@@ -423,15 +471,19 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
             String candidate = !text.isEmpty() ? text : description;
             int score = textMatchScore(candidate, title);
             if (score > 0) {
-                AccessibilityNodeInfo clickable = clickableAncestor(node, 8);
+                AccessibilityNodeInfo clickable = compactResultAncestor(node, 8);
                 if (clickable != null) {
                     String family = normalize(flattenText(clickable, 3));
-                    if (!artist.isEmpty() && family.contains(artist)) score += 55;
-                    Rect bounds = new Rect();
-                    clickable.getBoundsInScreen(bounds);
-                    int screenHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels);
-                    if (bounds.centerY() > screenHeight * 0.16f) score += 10;
-                    out.add(new ScoredNode(clickable, score));
+                    if (!artist.isEmpty() && family.contains(artist)) {
+                        score += 55;
+                        Rect bounds = new Rect();
+                        clickable.getBoundsInScreen(bounds);
+                        int screenHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+                        if (bounds.centerY() > screenHeight * 0.16f) {
+                            score += 10;
+                            out.add(new ScoredNode(clickable, score));
+                        }
+                    }
                 }
             }
         }
@@ -443,8 +495,6 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
     private static int textMatchScore(String actual, String expected) {
         if (actual.isEmpty() || expected.isEmpty()) return 0;
         if (actual.equals(expected)) return 180;
-        if (actual.contains(expected)) return 135;
-        if (expected.contains(actual) && actual.length() >= Math.min(4, expected.length())) return 65;
         return 0;
     }
 
@@ -477,6 +527,22 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         return null;
     }
 
+    private AccessibilityNodeInfo compactResultAncestor(AccessibilityNodeInfo node, int limit) {
+        int screenHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+        AccessibilityNodeInfo current = node;
+        for (int i = 0; current != null && i <= limit; i++) {
+            if (current.isClickable()) {
+                Rect bounds = new Rect();
+                current.getBoundsInScreen(bounds);
+                if (!bounds.isEmpty() && bounds.height() <= screenHeight * 0.22f) {
+                    return current;
+                }
+            }
+            current = current.getParent();
+        }
+        return null;
+    }
+
     private boolean setNodeText(AccessibilityNodeInfo node, String text) {
         if (node == null || text == null || text.trim().isEmpty()) return false;
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
@@ -490,6 +556,19 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         AccessibilityNodeInfo clickable = clickableAncestor(node, 8);
         if (clickable != null && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
 
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+        if (bounds.isEmpty()) return false;
+        Path path = new Path();
+        path.moveTo(bounds.exactCenterX(), bounds.exactCenterY());
+        GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0L, 80L))
+                .build();
+        return dispatchGesture(gesture, null, null);
+    }
+
+    private boolean tapNode(AccessibilityNodeInfo node) {
+        if (node == null) return false;
         Rect bounds = new Rect();
         node.getBoundsInScreen(bounds);
         if (bounds.isEmpty()) return false;
@@ -803,8 +882,10 @@ public final class QQMusicLyricsAccessibilityService extends AccessibilityServic
         int stage = STAGE_OPEN_SEARCH;
         long lastActionAt = startedAt;
         long lastLaunchAt;
-        boolean simplified;
         boolean launchedUi;
+        boolean playActionAttempted;
+        boolean searchEntryTapped;
+        boolean searchContextRecovered;
 
         SearchRequest(String commandId, String query, String title, String artist) {
             this.commandId = commandId == null ? "" : commandId;

@@ -171,10 +171,20 @@ public final class RoomApi {
     }
 
     public static void acknowledgeCommandSync(Context context, String commandId, String status, String message) throws Exception {
+        acknowledgeCommandSync(context, commandId, status, message, null);
+    }
+
+    public static void acknowledgeCommandSync(
+            Context context,
+            String commandId,
+            String status,
+            String message,
+            JSONObject details
+    ) throws Exception {
         String server = Prefs.server(context);
         RoomCredentials room = Prefs.room(context);
         if (room.code.isEmpty() || room.secret.isEmpty()) return;
-        acknowledgeCommandSync(server, room.code, room.secret, commandId, status, message);
+        acknowledgeCommandSync(server, room.code, room.secret, commandId, status, message, details);
     }
 
     public static void acknowledgeCommandSync(
@@ -185,10 +195,23 @@ public final class RoomApi {
             String status,
             String message
     ) throws Exception {
+        acknowledgeCommandSync(server, roomCode, roomSecret, commandId, status, message, null);
+    }
+
+    public static void acknowledgeCommandSync(
+            String server,
+            String roomCode,
+            String roomSecret,
+            String commandId,
+            String status,
+            String message,
+            JSONObject details
+    ) throws Exception {
         if (server == null || server.isEmpty() || roomCode == null || roomCode.isEmpty() || roomSecret == null || roomSecret.isEmpty()) {
             return;
         }
         JSONObject body = new JSONObject().put("status", status).put("message", message);
+        if (details != null) body.put("details", details);
         request(
                 "POST",
                 server + "/api/rooms/" + roomCode + "/commands/" + commandId + "/ack",
