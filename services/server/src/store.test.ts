@@ -6,6 +6,27 @@ import test from 'node:test';
 import { RoomStore } from './store.js';
 import { toPublicRoom } from './types.js';
 
+class InMemoryRoomStoreDatabase {
+  private rooms: unknown = [];
+  private exists = false;
+
+  async query(queryText: string, values?: readonly unknown[]): Promise<{ rows: Array<{ rooms: unknown }> }> {
+    if (queryText.startsWith('select rooms')) {
+      return { rows: this.exists ? [{ rooms: structuredClone(this.rooms) }] : [] };
+    }
+    if (!queryText.startsWith('insert into app_private.tongpin_room_store')) {
+      throw new Error(`Unexpected query: ${queryText}`);
+    }
+    assert.equal(values?.[0], 'current');
+    this.rooms = JSON.parse(String(values?.[1]));
+    this.exists = true;
+    return { rows: [] };
+  }
+}
+
+const createStore = (database = new InMemoryRoomStoreDatabase()): RoomStore =>
+  new RoomStore('postgresql://test.invalid/tongpin', database);
+
 const setNow = (value: number): void => {
   Date.now = () => value;
 };
@@ -23,7 +44,7 @@ const playback = (overrides: Partial<Parameters<RoomStore['publishPlayback']>[2]
 test('command lifecycle is visible and clears after execution', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     const room = await store.create();
     await store.publishPlayback(room.code, room.secret, {
       title: 'Song', artist: 'Artist', durationMs: 1000, positionMs: 10,
@@ -45,9 +66,9 @@ test('command lifecycle is visible and clears after execution', async () => {
 
 test('room data and synced lyric fields survive store reload', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
-  const file = join(dir, 'rooms.json');
   try {
-    const first = new RoomStore(file);
+    const database = new InMemoryRoomStoreDatabase();
+    const first = createStore(database);
     const room = await first.create();
     await first.publishPlayback(room.code, room.secret, {
       title: 'Song',
@@ -63,7 +84,7 @@ test('room data and synced lyric fields survive store reload', async () => {
       lyricsSource: 'LRCLIB',
       lyricsSynced: true
     });
-    const second = new RoomStore(file);
+    const second = createStore(database);
     await second.load();
     const loaded = second.authenticate(room.code, room.secret);
     assert.equal(loaded.playback?.lyric, 'current line');
@@ -78,7 +99,7 @@ test('public room projects a recent playing position without mutating stored dat
   const originalNow = Date.now;
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     setNow(10_000);
     const room = await store.create();
     await store.publishPlayback(room.code, room.secret, {
@@ -99,7 +120,7 @@ test('public room projects a recent playing position without mutating stored dat
 test('search command keeps its final device-confirmed result by command id', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-store-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     await store.load();
     const room = await store.create();
     const queued = await store.setCommand(room.code, room.secret, {
@@ -125,7 +146,7 @@ test('search command keeps its final device-confirmed result by command id', asy
 test('public room exposes playerName derived from packageName', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     const room = await store.create();
     await store.publishPlayback(room.code, room.secret, {
       title: 'Song', artist: 'Artist', durationMs: 1000, positionMs: 10,
@@ -142,7 +163,7 @@ test('public room exposes playerName derived from packageName', async () => {
 test('new room starts with zero listening duration', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     const room = await store.create();
     assert.equal(room.listeningDurationMs, 0);
     assert.equal(toPublicRoom(room).listeningDurationMs, 0);
@@ -155,7 +176,7 @@ test('listening duration accumulates only after a playing snapshot', async () =>
   const originalNow = Date.now;
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     setNow(1_000);
     const room = await store.create();
 
@@ -183,7 +204,7 @@ test('listening duration continues across track changes and caps one increment a
   const originalNow = Date.now;
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     setNow(10_000);
     const room = await store.create();
 
@@ -204,9 +225,9 @@ test('listening duration continues across track changes and caps one increment a
 
 test('new room can inherit client listening history without deleting existing history', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
-  const file = join(dir, 'rooms.json');
   try {
-    const store = new RoomStore(file);
+    const database = new InMemoryRoomStoreDatabase();
+    const store = createStore(database);
     const room = await store.create();
     await store.publishPlayback(room.code, room.secret, playback({ title: 'New room song' }), {
       listeningDurationMs: 42_000,
@@ -223,7 +244,7 @@ test('new room can inherit client listening history without deleting existing hi
     assert.equal(room.notes.length, 1);
     assert.equal(room.notes[0].text, 'still here');
 
-    const reloaded = new RoomStore(file);
+    const reloaded = createStore(database);
     await reloaded.load();
     const loaded = reloaded.authenticate(room.code, room.secret);
     assert.equal(loaded.listeningDurationMs, 42_000);
@@ -242,9 +263,9 @@ test('new room can inherit client listening history without deleting existing hi
 
 test('deleted note tombstone prevents stale client cache from reviving it', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
-  const file = join(dir, 'rooms.json');
   try {
-    const store = new RoomStore(file);
+    const database = new InMemoryRoomStoreDatabase();
+    const store = createStore(database);
     const room = await store.create();
     await store.publishPlayback(room.code, room.secret, playback({ playing: false }), {
       listeningDurationMs: 90_000,
@@ -297,7 +318,7 @@ test('deleted note tombstone prevents stale client cache from reviving it', asyn
     assert.deepEqual(room.notes.map(note => note.id), ['note-keep']);
     assert.equal(room.listeningDurationMs, beforeDuration);
 
-    const reloaded = new RoomStore(file);
+    const reloaded = createStore(database);
     await reloaded.load();
     const loaded = reloaded.authenticate(room.code, room.secret);
     assert.deepEqual(loaded.notes.map(note => note.id), ['note-keep']);
@@ -321,7 +342,7 @@ test('deleted note tombstone prevents stale client cache from reviving it', asyn
 test('legacy notes without id receive stable ids during sync', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     const room = await store.create();
     await store.publishPlayback(room.code, room.secret, playback(), {
       notes: [{
@@ -354,7 +375,7 @@ test('legacy notes without id receive stable ids during sync', async () => {
 test('new room inherits deleted note tombstones from client history', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tongpin-clean-'));
   try {
-    const store = new RoomStore(join(dir, 'rooms.json'));
+    const store = createStore();
     const room = await store.create();
     await store.publishPlayback(room.code, room.secret, playback(), {
       listeningDurationMs: 12_000,

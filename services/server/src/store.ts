@@ -1,10 +1,14 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { customAlphabet, nanoid } from 'nanoid';
+import { Pool } from 'pg';
 import type { CommandResult, CommandResultDetails, CommandStatus, ListeningNote, PlaybackCommand, PlaybackSnapshot, Room } from './types.js';
 
 const roomCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const MAX_LISTENING_INCREMENT_MS = 10_000;
+const STORE_KEY = 'current';
+
+interface RoomStoreDatabase {
+  query(queryText: string, values?: readonly unknown[]): Promise<{ rows: Array<{ rooms: unknown }> }>;
+}
 
 interface ClientListeningState {
   listeningDurationMs?: number;
@@ -37,35 +41,48 @@ export class RoomStore {
   private rooms = new Map<string, Room>();
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    databaseUrl: string,
+    private readonly database: RoomStoreDatabase = new Pool({
+      connectionString: databaseUrl,
+      ssl: { rejectUnauthorized: false }
+    })
+  ) {}
 
   async load(): Promise<void> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw) as Room[];
-      this.rooms = new Map(parsed.map(room => [room.code, {
-        ...room,
-        listeningDurationMs: Math.max(0, Number(room.listeningDurationMs ?? 0)),
-        deletedNoteIds: Array.isArray(room.deletedNoteIds) ? room.deletedNoteIds.filter(Boolean) : [],
-        notes: (room.notes ?? []).map(note => ({ ...note, id: stableNoteId(note) })).filter(note => {
-          const deleted = Array.isArray(room.deletedNoteIds) && room.deletedNoteIds.includes(note.id);
-          return note.id && !deleted;
-        }),
-        commandResults: Array.isArray(room.commandResults)
-          ? room.commandResults.slice(-100)
-          : room.lastCommandResult ? [room.lastCommandResult] : []
-      }]));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const result = await this.database.query(
+      'select rooms from app_private.tongpin_room_store where store_key = $1',
+      [STORE_KEY]
+    );
+    const rooms = result.rows[0]?.rooms;
+    if (rooms === undefined) {
+      this.rooms = new Map();
+      return;
     }
+    if (!Array.isArray(rooms)) throw new Error('INVALID_ROOM_STORE_SNAPSHOT');
+    this.rooms = new Map((rooms as Room[]).map(room => [room.code, {
+      ...room,
+      listeningDurationMs: Math.max(0, Number(room.listeningDurationMs ?? 0)),
+      deletedNoteIds: Array.isArray(room.deletedNoteIds) ? room.deletedNoteIds.filter(Boolean) : [],
+      notes: (room.notes ?? []).map(note => ({ ...note, id: stableNoteId(note) })).filter(note => {
+        const deleted = Array.isArray(room.deletedNoteIds) && room.deletedNoteIds.includes(note.id);
+        return note.id && !deleted;
+      }),
+      commandResults: Array.isArray(room.commandResults)
+        ? room.commandResults.slice(-100)
+        : room.lastCommandResult ? [room.lastCommandResult] : []
+    }]));
   }
 
   private persist(): Promise<void> {
     this.writeQueue = this.writeQueue.then(async () => {
-      await mkdir(dirname(this.filePath), { recursive: true });
-      const temp = `${this.filePath}.tmp`;
-      await writeFile(temp, JSON.stringify([...this.rooms.values()], null, 2), 'utf8');
-      await rename(temp, this.filePath);
+      await this.database.query(
+        `insert into app_private.tongpin_room_store (store_key, rooms, updated_at)
+         values ($1, $2::jsonb, now())
+         on conflict (store_key) do update
+         set rooms = excluded.rooms, updated_at = excluded.updated_at`,
+        [STORE_KEY, JSON.stringify([...this.rooms.values()])]
+      );
     });
     return this.writeQueue;
   }

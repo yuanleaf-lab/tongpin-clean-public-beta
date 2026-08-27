@@ -8,10 +8,11 @@ import { RoomStore } from './store.js';
 import { playerNameOf, toPublicRoom, type CommandResultDetails, type CommandStatus, type ListeningNote, type PlaybackCommandType, type PlaybackSnapshot } from './types.js';
 
 const port = Number(process.env.PORT ?? 3000);
-const dataFile = process.env.DATA_FILE ?? './data/rooms.json';
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error('DATABASE_URL is required');
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const controlFile = fileURLToPath(new URL('../public/control.html', import.meta.url));
-const store = new RoomStore(dataFile);
+const store = new RoomStore(databaseUrl);
 await store.load();
 
 const app = express();
