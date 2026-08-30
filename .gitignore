@@ -11,8 +11,16 @@ services/server/data/
 !.env.example
 *.jks
 *.keystore
+*.pem
+*.key
 key.properties
 signing.properties
+credentials*
+secrets*
+service-account*
+google-services.json
+rooms.json
+tongpin-rooms.json
 *.apk
 *.aab
 .DS_Store

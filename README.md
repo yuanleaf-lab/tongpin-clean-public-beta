@@ -14,7 +14,7 @@
 - 新增 `search_and_play` MCP 工具与网页遥控器“搜索并自动播放”入口。优先尝试系统媒体搜索；QQ 音乐不响应时，可通过无障碍服务自动打开 QQ 音乐、输入关键词并点击匹配结果。
 - Render 一键部署继续保留；局域网部署入口和 `/lan` 自检说明继续保留。
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/linzhi-524/tongpin-clean-public-beta)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/yuanleaf-lab/tongpin-clean-public-beta)
 
 ## 最快开始
 

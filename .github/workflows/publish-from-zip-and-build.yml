@@ -25,13 +25,13 @@ jobs:
 
       - name: Check uploaded ZIP
         run: |
-          set -eux
+          set -euo pipefail
           test -f "${{ inputs.zip_name }}"
-          ls -lh "${{ inputs.zip_name }}"
+          echo "ZIP file found."
 
       - name: Unzip ZIP and replace repository content
         run: |
-          set -eux
+          set -euo pipefail
 
           rm -rf /tmp/tongpin-unpack
           mkdir -p /tmp/tongpin-unpack
@@ -41,28 +41,65 @@ jobs:
           ANDROID_DIR="$(find /tmp/tongpin-unpack -type d -path '*/apps/android' | head -n 1)"
           if [ -z "$ANDROID_DIR" ]; then
             echo "Cannot find apps/android inside ZIP"
-            find /tmp/tongpin-unpack -maxdepth 5 -type d
             exit 1
           fi
 
           PROJECT_ROOT="$(dirname "$(dirname "$ANDROID_DIR")")"
-          echo "Using project root: $PROJECT_ROOT"
-
           rsync -a --delete "$PROJECT_ROOT"/ ./ \
             --exclude='.git/' \
             --exclude='.github/'
 
           find . -maxdepth 1 -type f -name '*.zip' -print -delete || true
 
-          echo "Repository root after replacement:"
-          ls -la
           test -f README.md
           test -d apps/android
           test -d services/server
+          echo "Repository structure validated."
+
+      - name: Block sensitive files and credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -d '' sensitive_files < <(
+            find . -path './.git' -prune -o -type f \( \
+              -name '.env' -o \( -name '.env.*' ! -name '.env.example' \) -o \
+              -name '*.pem' -o -name '*.key' -o -name '*.jks' -o -name '*.keystore' -o \
+              -name 'key.properties' -o -name 'signing.properties' -o -name 'local.properties' -o \
+              -name 'google-services.json' -o -iname 'credentials*' -o -iname 'secrets*' -o \
+              -iname 'service-account*' -o -name 'rooms.json' -o -name 'tongpin-rooms.json' \
+            \) -print0
+          )
+          if (( ${#sensitive_files[@]} > 0 )); then
+            echo "Sensitive filename policy failed; refusing to stage the uploaded content."
+            exit 1
+          fi
+
+          token_pattern='sk-(proj-)?[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|-----BEGIN (RSA |OPENSSH )?PRIVATE KEY-----'
+          token_matches="$(grep -RIlE --exclude-dir=.git --binary-files=without-match "$token_pattern" . || true)"
+          if [[ -n "$token_matches" ]]; then
+            echo "Potential credential content detected; refusing to stage the uploaded content."
+            exit 1
+          fi
+
+          database_matches="$(grep -RIl --exclude-dir=.git --exclude='.env.example' --binary-files=without-match 'postgresql://' . || true)"
+          if [[ -n "$database_matches" ]]; then
+            echo "Database URL detected outside the approved environment template; refusing to stage the uploaded content."
+            exit 1
+          fi
+
+          if [ -f services/server/.env.example ] && grep -q 'postgresql://' services/server/.env.example; then
+            if ! grep -qE '^DATABASE_URL=postgresql://[^:]+:YOUR_[A-Z0-9_]+@YOUR_[A-Z0-9_]+:[0-9]+/[^[:space:]]*$' services/server/.env.example; then
+              echo "Environment template database URL is not an approved placeholder; refusing to stage the uploaded content."
+              exit 1
+            fi
+          fi
+
+          echo "Sensitive content check passed."
 
       - name: Commit replaced public version
         run: |
-          set -eux
+          set -euo pipefail
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

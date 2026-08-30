@@ -2,19 +2,19 @@
 
 ## 1. 测试环境
 
-- 操作系统：Windows 11 家庭中文版 10.0.26100，64-bit
+- 操作系统：Windows 11 测试环境，64-bit
 - Node.js：v24.18.0
 - npm：11.16.0
 - Java：Temurin JDK 17.0.19，用于 Android 构建
 - 现有 Java：Temurin JDK 21 保留，未卸载
 - Gradle：8.10.2
-- Android SDK：`C:\Users\whisper\AppData\Local\Android\Sdk`
+- Android SDK：`C:\Users\<USERNAME>\AppData\Local\Android\Sdk`
 - Android SDK Platform：android-35
 - Android SDK Build-Tools：35.0.0
 - Android SDK Command-line Tools：latest
-- 手机型号：vivo V2430A
+- 手机型号：Android 测试设备
 - 手机 Android 版本：Android 16，SDK 36
-- 测试服务端地址：`http://192.168.0.100:3000`
+- 测试服务端地址：`http://YOUR_LAN_IP:3000`
 - 本地 MCP 地址：`http://localhost:3000/mcp`
 
 ## 2. 服务端测试
@@ -26,7 +26,7 @@
 - 房间 API：通过，App 可创建房间
 - playback API：通过，Android App 可上传真实 QQ 音乐播放状态
 - 数据文件：默认保存到 `services/server/data/rooms.json`
-- Windows 防火墙：已新增本机 TCP 3000 入站允许规则，手机浏览器可访问 `/health`
+- Windows 防火墙：已允许测试端口 TCP 3000 入站访问，测试设备可访问 `/health`
 
 ## 3. Android 测试
 
@@ -37,7 +37,7 @@
 - APK 安装：通过，`adb install -r` 返回 `Success`
 - 包名：`com.linjian.tongpin`
 - App 启动：通过，`com.linjian.tongpin/.MainActivity` 可正常打开，无启动崩溃
-- 服务器连接：通过，App 保存 `http://192.168.0.100:3000` 后检测成功
+- 服务器连接：通过，App 保存 `http://YOUR_LAN_IP:3000` 后检测成功
 - 通知权限：已授权
 - 通知监听：已开启，`enabled_notification_listeners` 包含 `com.linjian.tongpin.media.TongpinNotificationListener`
 - 后台同步：已开启，状态为 `服务器已连接 · 实时同步中`
@@ -75,7 +75,7 @@
   - 当前版本已改为 Supabase Postgres 单行 JSONB 快照持久化，Render 重启后会重新读取该快照。
 
 - Android 服务地址切换：
-  - 本地测试地址为 `http://192.168.0.100:3000`。
+  - 本地测试地址为 `http://YOUR_LAN_IP:3000`。
   - Render 部署后 App 服务器地址需要改为 Render 的基础地址，例如 `https://your-service.onrender.com`。
   - App 中不要填写 `/mcp`、`/api` 或 `/control`。
 
